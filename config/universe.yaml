@@ -1,0 +1,25 @@
+# ETF universe — editable, max ~15 tickers (free API limits)
+# Grouped by asset class for regime/risk analysis
+
+equity_us:
+  - SPY   # S&P 500
+  - QQQ   # Nasdaq 100
+  - IWM   # Russell 2000 (small cap)
+
+equity_intl:
+  - EFA   # Developed markets ex-US
+  - EEM   # Emerging markets
+
+bonds:
+  - TLT   # 20+ yr US Treasuries
+  - IEF   # 7-10 yr US Treasuries
+  - LQD   # Investment-grade corporate bonds
+
+commodities:
+  - GLD   # Gold
+
+sectors:
+  - XLE   # Energy
+  - XLK   # Technology
+  - XLF   # Financials
+  - XLV   # Health Care

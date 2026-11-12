@@ -1,0 +1,12 @@
+# Example portfolio configuration
+# Copy to portfolio.yaml and edit weights (must sum to 1.0)
+# Populated in Phase 3 (portfolio module).
+
+# portfolio:
+#   name: My ETF Portfolio
+#   holdings:
+#     SPY: 0.40
+#     TLT: 0.20
+#     QQQ: 0.20
+#     GLD: 0.10
+#     EFA: 0.10

@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Data — raw dumps and warehouse never committed
+data/raw/
+*.duckdb
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+
+# Virtual env
+.venv/
+
+# macOS
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
