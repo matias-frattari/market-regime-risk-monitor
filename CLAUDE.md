@@ -21,10 +21,11 @@ Core ETFs: SPY, QQQ, IWM (equity), EFA, EEM (intl equity), TLT, IEF, LQD (bonds)
 XLE, XLK, XLF, XLV (sectors). Cap the universe at ~15 tickers in v1 (free API limits).
 Optional later: S&P 500 constituents.
 
-## Data sources (validate limits in Phase 0 before committing to a provider)
-- Prices (daily, adjusted): one provider behind a `PriceProvider` interface.
-  Candidates: Alpha Vantage, Twelve Data, Alpaca. Free tiers are small: respect rate limits,
-  cache raw responses, make ingestion incremental and idempotent.
+## Data sources
+- Prices (daily, adjusted): Twelve Data free plan (`/time_series`, `adjust=all`) behind a
+  `PriceProvider` interface (decision: docs/decisions/0001-price-provider.md).
+  Limit 8 req/min: space calls ~8 s apart (~100 s for 13 tickers). Cache raw responses,
+  make ingestion incremental and idempotent. Key: `TWELVEDATA_API_KEY`.
 - Macro (FRED API, free key): DGS10, DGS2, T10Y2Y, DGS3MO, FEDFUNDS, CPIAUCSL, UNRATE,
   VIXCLS, BAMLH0A0HYM2 (high-yield spread).
 - SEC EDGAR is NOT in v1 (future extension).
@@ -80,9 +81,10 @@ and 60/40 (SPY/IEF). Report performance per regime. State limitations (estimatio
 in-sample bias) in methodology.md.
 
 ## Tableau exports (data/exports/)
-Small, tidy CSVs: dim_assets, fact_performance_indexed (base 100), fact_risk_metrics,
+Small, tidy CSVs: dim_assets, fact_risk_metrics,
 fact_correlations, fact_regime, fact_backtest_equity, fact_backtest_summary.
-Prefer derived metrics over raw vendor prices (licensing of redistributed data).
+Never export price series or daily per-ticker returns; export only aggregated metrics and
+portfolio backtest curves (licensing of redistributed data, see docs/decisions/0001).
 Dashboard pages: 1) Macro Regime, 2) Portfolio Risk, 3) Rebalancing & Backtest.
 
 ## How Claude Code must work in this repo
