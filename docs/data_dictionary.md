@@ -72,6 +72,17 @@ One row per ingestion attempt per ticker/series. PK: `log_id` (sequence `ingest_
 | message | VARCHAR | yes | Error detail; never contains URLs or API keys |
 | logged_at | TIMESTAMP | no | Attempt time (UTC) |
 
+Price ingestion (`mrm.ingest.prices`) writes one row per ticker and run:
+- `success`: bars loaded; `date_from`/`date_to` = first/last bar; `message` notes rows dropped
+  for a null close and/or `dropped partial bar` (today's intraday bar, before 16:30 New York),
+  joined by `; `, if any.
+- `no_data`: empty response; nothing deleted, dates NULL.
+- `error`: nothing deleted, dates NULL, `rows_loaded = 0`. `message` is one of: exception type
+  plus HTTP status (`ConnectionError status=N/A`), `HTTP <code>`, `api_error code=<code>`
+  (the API's text is not copied), `invalid meta: <field>=<value>`, `invalid close on <date>`,
+  `dates not strictly ascending at <date>`, `stale data: last date <date>`,
+  `aborted: rate limit`, or a bare exception type name for unexpected errors.
+
 ## CSV exports (`data/exports/`)
 
 > TODO: document Tableau export schemas (later phases).
