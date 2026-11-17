@@ -3,6 +3,12 @@ name = "mrm"
 version = "0.1.0"
 description = "Market Regime & Portfolio Risk Monitor"
 requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=2.0.0",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "requests>=2.34.2",
+]
 
 [dependency-groups]
 dev = ["ruff>=0.9", "pytest>=8.0", "hatchling>=1.25"]
