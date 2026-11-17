@@ -103,6 +103,29 @@ def upsert_assets(con: duckdb.DuckDBPyConnection, assets: Iterable[Asset]) -> in
     return len(rows)
 
 
+def sync_assets(con: duckdb.DuckDBPyConnection, assets: Iterable[Asset]) -> int:
+    """Make dim_asset equal to ``assets``: delete tickers no longer present, upsert the rest,
+    in one transaction. Raw prices and ingest_log rows of removed tickers are kept.
+    Raises ValueError on an empty universe (never wipes the table). Returns tickers written.
+    """
+    rows = _dedupe(assets, key=lambda a: a.ticker)
+    if not rows:
+        raise ValueError("sync_assets needs a non-empty universe")
+    now = utc_now()
+    _run_in_transaction(
+        con,
+        [
+            (
+                "DELETE FROM dim_asset WHERE NOT list_contains(?::VARCHAR[], ticker)",
+                [[a.ticker for a in rows]],
+                False,
+            ),
+            (_UPSERT_ASSET, [(a.ticker, a.asset_class, now) for a in rows], True),
+        ],
+    )
+    return len(rows)
+
+
 def upsert_prices(
     con: duckdb.DuckDBPyConnection, bars: Iterable[PriceBar], source: str = PRICE_SOURCE
 ) -> int:

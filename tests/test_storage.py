@@ -15,11 +15,12 @@ from mrm.storage.loaders import (
     log_ingestion,
     macro_fetch_start,
     replace_prices,
+    sync_assets,
     upsert_assets,
     upsert_macro,
     upsert_prices,
 )
-from mrm.storage.models import MacroObservation, PriceBar
+from mrm.storage.models import Asset, MacroObservation, PriceBar
 from mrm.storage.schema import TABLES, create_schema
 
 D0 = date(2020, 1, 1)
@@ -65,6 +66,28 @@ def test_upsert_assets_from_universe_is_idempotent(con: duckdb.DuckDBPyConnectio
     assets = load_universe()
     upsert_assets(con, assets)
     upsert_assets(con, assets)
+    assert count(con, "dim_asset") == 13
+
+
+def test_sync_assets_removes_tickers_dropped_from_universe(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    upsert_assets(con, [Asset("OLD", "equity_intl"), Asset("SPY", "bonds")])
+    replace_prices(con, "OLD", synthetic_bars("OLD", 2))
+    assert sync_assets(con, load_universe()) == 13
+    tickers = {r[0] for r in con.execute("SELECT ticker FROM dim_asset").fetchall()}
+    assert tickers == {a.ticker for a in load_universe()}
+    assert (
+        con.execute("SELECT asset_class FROM dim_asset WHERE ticker = 'SPY'").fetchone()[0]
+        == "equity_us"
+    )
+    assert count(con, "raw_prices", "ticker = 'OLD'") == 2  # history is not touched
+
+
+def test_sync_assets_rejects_empty_universe(con: duckdb.DuckDBPyConnection) -> None:
+    upsert_assets(con, load_universe())
+    with pytest.raises(ValueError, match="non-empty"):
+        sync_assets(con, [])
     assert count(con, "dim_asset") == 13
 
 

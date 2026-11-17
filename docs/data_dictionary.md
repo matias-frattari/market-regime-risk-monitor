@@ -14,6 +14,14 @@ Conventions:
 
 ### `dim_asset`
 One row per ticker of `config/universe.yaml`. PK: `ticker`.
+Kept equal to the universe by `sync_assets` (run by the price ingestion CLI): tickers removed
+from the YAML are deleted from `dim_asset` in the same transaction as the upsert; their
+`raw_prices` and `ingest_log` rows are not touched.
+
+> **EEM → VWO (2026-11-17).** EEM was dropped: Twelve Data returned a mixed series for it
+> (1494 dates duplicated with different values, history only from 2012), with and without
+> `mic_code=ARCX`. It was replaced by VWO (FTSE Emerging Markets), which passed validation.
+> See the note in `docs/decisions/0001-price-provider.md`.
 
 | Column | Type | Null | Description |
 |---|---|---|---|

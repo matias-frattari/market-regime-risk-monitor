@@ -20,7 +20,7 @@ from mrm.config import load_universe
 from mrm.ingest.providers import PriceProvider, ProviderError, RateLimitError, redact
 from mrm.ingest.twelvedata import TwelveDataProvider
 from mrm.storage.db import connect
-from mrm.storage.loaders import log_ingestion, replace_prices, upsert_assets
+from mrm.storage.loaders import log_ingestion, replace_prices, sync_assets
 from mrm.storage.schema import create_schema
 
 API_KEY_ENV = "TWELVEDATA_API_KEY"
@@ -233,7 +233,7 @@ def main(
     try:
         if con is not None and not args.dry_run:
             create_schema(con)
-            upsert_assets(con, universe)
+            sync_assets(con, universe)
         mode = " (dry run: nothing is written)" if args.dry_run else ""
         print(f"Ingesting {len(tickers)} tickers from {provider.name}{mode}")
 
