@@ -75,8 +75,12 @@ prices on the free plan, and its limits are enough for the 13-ticker universe.
 
 1. Ingestion goes behind the `PriceProvider` interface and caches raw responses
    locally (gitignored).
-2. Loads are incremental and idempotent: only dates after the last stored one are
-   requested.
+2. Loads are idempotent but **not** incremental for prices: with `adjust=all` the whole
+   history is re-adjusted after every dividend/split, and the 5000-bar window moves
+   forward. Each run reloads every ticker in full and replaces its stored history in one
+   transaction (delete + insert; an empty response deletes nothing). The cost is the same
+   one request per ticker. *(Amended in Phase 1.1; originally "only dates after the last
+   stored one are requested".)*
 3. The client must space requests ~8 s apart (8 req/min): ≈ 100 s per run for
    13 tickers. A 1 s pause is **not** enough.
 4. Tableau exports must follow the licensing rule above.

@@ -24,10 +24,13 @@ Optional later: S&P 500 constituents.
 ## Data sources
 - Prices (daily, adjusted): Twelve Data free plan (`/time_series`, `adjust=all`) behind a
   `PriceProvider` interface (decision: docs/decisions/0001-price-provider.md).
-  Limit 8 req/min: space calls ~8 s apart (~100 s for 13 tickers). Cache raw responses,
-  make ingestion incremental and idempotent. Key: `TWELVEDATA_API_KEY`.
+  Limit 8 req/min: space calls ~8 s apart (~100 s for 13 tickers). Cache raw responses.
+  Ingestion is idempotent. `adjust=all` re-adjusts the whole history after each dividend/split,
+  so prices are reloaded in full per ticker on every run (`replace_prices`: delete + insert in
+  one transaction; an empty response deletes nothing). Key: `TWELVEDATA_API_KEY`.
 - Macro (FRED API, free key): DGS10, DGS2, T10Y2Y, DGS3MO, FEDFUNDS, CPIAUCSL, UNRATE,
-  VIXCLS, BAMLH0A0HYM2 (high-yield spread).
+  VIXCLS, BAMLH0A0HYM2 (high-yield spread). FRED revises data, so macro loads are incremental
+  with a 90-day overlap window (re-fetch from last stored date minus 90 days, then upsert).
 - SEC EDGAR is NOT in v1 (future extension).
 - Secrets only via `.env` (never committed). Provide `.env.example`.
 
@@ -60,7 +63,7 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 - Never commit: `.env`, API keys, `*.duckdb`, raw API dumps, notebooks with outputs holding keys.
 
 ## Data model (DuckDB)
-raw_prices, raw_macro, dim_asset, fact_returns, fact_risk_metrics, fact_regime,
+raw_prices, raw_macro, dim_asset, ingest_log, fact_returns, fact_risk_metrics, fact_regime,
 fact_backtest_equity, fact_backtest_summary. Every table documented in docs/data_dictionary.md.
 
 ## Metric definitions (document formulas in docs/methodology.md)
@@ -102,7 +105,7 @@ data refreshed on a schedule; README with problem, method, results, screenshots 
 live Tableau Public link; methodology and limitations documented.
 
 ## Commands (fill in as they are built)
-- setup: TBD
+- setup: `uv sync` (warehouse path: `MRM_DB_PATH`, default `data/warehouse.duckdb`)
 - ingest: TBD
-- test: TBD
+- test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - export: TBD
