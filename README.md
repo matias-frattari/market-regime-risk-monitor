@@ -68,7 +68,9 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 ## Data sources
 
 - **Prices (daily, adjusted):** one provider behind a `PriceProvider` interface (decided in step 0.2)
-- **Macro:** FRED API (free) — yield curve, VIX, HY spread, CPI, unemployment
+- **Macro:** FRED API (free) — Treasury yields and yield curve, fed funds, CPI, unemployment,
+  Fed financial stress indices (NFCI, STLFSI4). VIX and HY spread are excluded (copyrighted,
+  see [ADR 0002](docs/decisions/0002-macro-series-licensing.md)).
 
 ---
 

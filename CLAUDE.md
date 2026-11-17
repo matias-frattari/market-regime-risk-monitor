@@ -28,9 +28,14 @@ Optional later: S&P 500 constituents.
   Ingestion is idempotent. `adjust=all` re-adjusts the whole history after each dividend/split,
   so prices are reloaded in full per ticker on every run (`replace_prices`: delete + insert in
   one transaction; an empty response deletes nothing). Key: `TWELVEDATA_API_KEY`.
-- Macro (FRED API, free key): DGS10, DGS2, T10Y2Y, DGS3MO, FEDFUNDS, CPIAUCSL, UNRATE,
-  VIXCLS, BAMLH0A0HYM2 (high-yield spread). FRED revises data, so macro loads are incremental
-  with a 90-day overlap window (re-fetch from last stored date minus 90 days, then upsert).
+- Macro (FRED API, free key; series list in config/macro.yaml): DGS10, DGS2, T10Y2Y, DGS3MO,
+  FEDFUNDS, CPIAUCSL, UNRATE, NFCI, STLFSI4 (Fed financial stress indices). FRED revises data,
+  so macro loads are incremental with a 90-day overlap window (re-fetch from last stored date
+  minus 90 days, then upsert); NFCI and STLFSI4 revise their whole past, so they are re-fetched
+  in full every run (`overlap_days: full`). Key: `FRED_API_KEY`.
+- VIXCLS (Cboe) and BAMLH0A0HYM2 (ICE, only 3 years on FRED) are copyrighted: never ingested,
+  published or used by regimes (the config loader rejects them). They are replaced by NFCI and
+  the realized volatility of SPY (decision: docs/decisions/0002-macro-series-licensing.md).
 - SEC EDGAR is NOT in v1 (future extension).
 - Secrets only via `.env` (never committed). Provide `.env.example`.
 
@@ -73,7 +78,9 @@ correlation matrix (rolling 126d); Euler risk contribution per asset.
 
 ## Regimes
 v1 rules (config/regimes.yaml, thresholds explicit and tunable): yield curve (T10Y2Y),
-VIX level, HY spread, unemployment trend -> Expansion / Slowdown / Stress.
+financial stress (NFCI; STLFSI4 as robustness check), SPY 60d realized volatility,
+unemployment trend -> Expansion / Slowdown / Stress. Apply publication lags (weekly NFCI is
+released the following Wednesday; monthly series the next month).
 v2: unsupervised model (GMM or HMM) and a comparison against v1. Report honestly where
 they disagree. Avoid look-ahead bias: use only information available at each date.
 
