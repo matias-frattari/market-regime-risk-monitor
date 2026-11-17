@@ -56,15 +56,24 @@ FRED observations. PK: `(series_id, obs_date)`.
 
 | Column | Type | Null | Description |
 |---|---|---|---|
-| series_id | VARCHAR | no | FRED id: DGS10, DGS2, T10Y2Y, DGS3MO, FEDFUNDS, CPIAUCSL, UNRATE, VIXCLS, BAMLH0A0HYM2 |
+| series_id | VARCHAR | no | FRED id from `config/macro.yaml`: DGS10, DGS2, T10Y2Y, DGS3MO, FEDFUNDS, CPIAUCSL, UNRATE, NFCI, STLFSI4 |
 | obs_date | DATE | no | Observation date |
 | value | DOUBLE | yes | NULL when FRED reports `.` (missing) |
 | source | VARCHAR | no | `fred` |
 | ingested_at | TIMESTAMP | no | Load time (UTC) |
 
-**Load strategy — incremental with overlap.** FRED revises recent data, so each run requests
-from `macro_fetch_start(con, series_id)` = last stored `obs_date` minus 90 days (full history
-when empty) and upserts by PK (`upsert_macro`). Rows with NULL `value` count as already fetched.
+`obs_date` is FRED's observation date (weekly NFCI/STLFSI4: the week's Friday; monthly
+series: the 1st of the month), **not** the publication date. Values are the latest vintage.
+
+> VIXCLS and BAMLH0A0HYM2 are copyrighted and never ingested
+> (`docs/decisions/0002-macro-series-licensing.md`).
+
+**Load strategy: incremental with overlap, per series (`overlap_days` in `config/macro.yaml`).**
+FRED revises data, so each run requests from `macro_fetch_start(con, series_id, overlap_days)`.
+That is the last stored `obs_date` minus the overlap window (90 days by default). The full
+history is requested when the table is empty, and on every run for `overlap_days: full`
+(NFCI, STLFSI4, whose whole past is revised). Rows are upserted by PK (`upsert_macro`). Rows
+with NULL `value` count as already fetched. Nothing is deleted.
 
 ### `ingest_log`
 One row per ingestion attempt per ticker/series. PK: `log_id` (sequence `ingest_log_seq`).
@@ -90,6 +99,21 @@ Price ingestion (`mrm.ingest.prices`) writes one row per ticker and run:
   (the API's text is not copied), `invalid meta: <field>=<value>`, `invalid close on <date>`,
   `dates not strictly ascending at <date>`, `stale data: last date <date>`,
   `aborted: rate limit`, or a bare exception type name for unexpected errors.
+
+Macro ingestion (`mrm.ingest.macro`) writes one row per series and run (`source = fred`):
+- `success`: observations upserted. `rows_loaded` includes rows with a NULL value.
+  `date_from`/`date_to` are the first/last observation received, not the full stored range.
+  `message` can hold `N missing values ('.')` and/or `full reload`, joined by `; `.
+- `no_data`: empty response, nothing written, dates NULL.
+- `error`: nothing written, dates NULL, `rows_loaded = 0`. `message` is one of:
+  - exception type plus HTTP status (`Timeout status=N/A`)
+  - `HTTP <code>`
+  - `api_error code=<code>` (FRED's text is not copied)
+  - `invalid JSON`
+  - `invalid value on <date>`
+  - `dates not strictly ascending at <date>`
+  - `truncated response`
+  - a bare exception type name for unexpected errors.
 
 ## CSV exports (`data/exports/`)
 

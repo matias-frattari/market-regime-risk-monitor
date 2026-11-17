@@ -32,3 +32,11 @@ class MacroObservation:
     series_id: str
     obs_date: date
     value: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class MacroSeries:
+    """One FRED series to ingest. ``overlap_days`` None means a full-history reload."""
+
+    series_id: str
+    overlap_days: int | None

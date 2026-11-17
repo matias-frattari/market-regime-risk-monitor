@@ -1,0 +1,17 @@
+# FRED macro series — editable. See docs/decisions/0002-macro-series-licensing.md.
+# overlap_days: days re-fetched before the last stored date to pick up revisions (default 90).
+#   "full" reloads the whole history every run (factor-model indices revise their full past).
+# VIXCLS and BAMLH0A0HYM2 are copyrighted (Cboe / ICE) and rejected by the loader.
+
+series:
+  - id: DGS10        # 10-year Treasury yield (daily)
+  - id: DGS2         # 2-year Treasury yield (daily)
+  - id: T10Y2Y       # 10y - 2y yield curve slope (daily)
+  - id: DGS3MO       # 3-month Treasury yield, risk-free rate (daily)
+  - id: FEDFUNDS     # Effective federal funds rate (monthly)
+  - id: CPIAUCSL     # CPI, all urban consumers, SA (monthly)
+  - id: UNRATE       # Unemployment rate, SA (monthly)
+  - id: NFCI         # Chicago Fed National Financial Conditions Index (weekly) — regime stress signal
+    overlap_days: full
+  - id: STLFSI4      # St. Louis Fed Financial Stress Index (weekly) — robustness check
+    overlap_days: full

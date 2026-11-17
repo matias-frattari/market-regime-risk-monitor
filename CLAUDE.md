@@ -115,5 +115,7 @@ live Tableau Public link; methodology and limitations documented.
 - setup: `uv sync` (warehouse path: `MRM_DB_PATH`, default `data/warehouse.duckdb`)
 - ingest prices: `uv run python -m mrm.ingest.prices [--tickers SPY,TLT] [--dry-run]`
   (~8 s between tickers, ~100 s for the full universe; `--dry-run` calls the API but writes nothing)
+- ingest macro: `uv run python -m mrm.ingest.macro [--series DGS10,NFCI] [--dry-run]`
+  (~1 s between series; `--dry-run` calls the API, requests full history, writes nothing)
 - test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - export: TBD

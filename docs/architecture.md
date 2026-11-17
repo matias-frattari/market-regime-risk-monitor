@@ -35,6 +35,34 @@ Per ticker: fetch → validate → `replace_prices` (full reload) → `log_inges
   the warehouse (no `raw_prices`, `dim_asset` or `ingest_log` rows).
 - **Exit codes:** 0 no ticker failed, 1 at least one `error`, 2 usage/config error.
 
+## Ingestion: macro series (`src/mrm/ingest/`)
+
+| Module | Role |
+|---|---|
+| `config/macro.yaml` + `mrm.config.load_macro_series` | Series list and per-series `overlap_days` (`full` = full reload); rejects copyrighted ids (`BLOCKED_SERIES`) |
+| `fred.py` | `FredClient`: one GET `series/observations` per series (`file_type=json`, `sort_order=asc`, optional `observation_start`), validation, raw cache |
+| `macro.py` | Orchestration (`ingest_series`, `ingest_macro`) and the CLI |
+
+Per series: `macro_fetch_start` (last date minus overlap; None = full history) → fetch →
+validate → `upsert_macro` → `log_ingestion`.
+
+- **Validation** (the series fails and nothing is written on any of these):
+  - Dates must be strictly ascending.
+  - Values must be numeric and finite. FRED's `"."` (missing) is stored as NULL and counted.
+  - The response must hold at least the `count` it reports (no truncation).
+- **Errors:** FRED error bodies (`error_code`) become `api_error code=<n>`; the message text is
+  never copied. HTTP 429 waits 20 s and retries once. One failing series never stops the others.
+- **Pacing:** 1 s between series (FRED allows 120 requests/min).
+- **API key:** `FRED_API_KEY` (`.env`). It is sent as a query parameter, so it gets the same
+  handling as Twelve Data: no URL, params or `requests` exception text is ever printed, logged
+  or chained, and messages pass through `redact`.
+- **Raw cache:** `data/raw/fred/<ID>.json` (gitignored; FRED responses do not contain the key).
+  It holds the last response, which for overlap series is only the window.
+- **`--dry-run`:** calls the API (full history, since it does not open the warehouse) and
+  validates, but writes nothing to the warehouse.
+- **Exit codes:** 0 no series failed; 1 at least one `error`; 2 usage/config error (unknown or
+  copyrighted series, missing key).
+
 ## Runtime dependencies
 
 | Library | Why |
