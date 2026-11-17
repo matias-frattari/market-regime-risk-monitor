@@ -4,6 +4,7 @@
 # Data — raw dumps and warehouse never committed
 data/raw/
 *.duckdb
+*.duckdb.wal
 
 # Python
 __pycache__/
