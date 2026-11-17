@@ -8,7 +8,7 @@ equity_us:
 
 equity_intl:
   - EFA   # Developed markets ex-US
-  - EEM   # Emerging markets
+  - VWO   # Emerging markets (replaces EEM, see ADR 0001)
 
 bonds:
   - TLT   # 20+ yr US Treasuries

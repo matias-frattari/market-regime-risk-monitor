@@ -5,7 +5,7 @@ import pytest
 from mrm.config import load_universe
 
 EXPECTED_TICKERS = {
-    "SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "IEF", "LQD", "GLD", "XLE", "XLK", "XLF", "XLV",
+    "SPY", "QQQ", "IWM", "EFA", "VWO", "TLT", "IEF", "LQD", "GLD", "XLE", "XLK", "XLF", "XLV",
 }  # fmt: skip
 
 
@@ -19,7 +19,7 @@ def test_universe_loads_13_unique_tickers() -> None:
 def test_universe_asset_classes() -> None:
     by_ticker = {a.ticker: a.asset_class for a in load_universe()}
     assert by_ticker["SPY"] == "equity_us"
-    assert by_ticker["EEM"] == "equity_intl"
+    assert by_ticker["VWO"] == "equity_intl"
     assert by_ticker["TLT"] == "bonds"
     assert by_ticker["GLD"] == "commodities"
     assert by_ticker["XLK"] == "sectors"

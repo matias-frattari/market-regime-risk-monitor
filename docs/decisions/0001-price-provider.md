@@ -87,3 +87,16 @@ prices on the free plan, and its limits are enough for the 13-ticker universe.
 5. Fallback: Alpaca (evaluated from documentation only) or Alpha Vantage with the
    adjustment rebuilt locally (not evaluated). Revisit this decision if Twelve Data's
    limits or terms change.
+
+## Note (Phase 1.2, 2026-11-17): EEM replaced by VWO
+
+During the first full load, Twelve Data returned a mixed series for **EEM**: 5000 bars with
+only 3506 distinct dates (1494 dates duplicated between 2013-03-11 and 2021-11-05, almost all
+with different values), so history started in 2012-12 instead of 2007. The symbol is
+ambiguous on the provider side, and requesting it with `mic_code=ARCX` returned the same
+mixed series. Ingestion validation rejected it and nothing was loaded.
+
+EEM was replaced by **VWO** (Vanguard FTSE Emerging Markets, same `equity_intl` group), which
+passed validation: 5000 bars, unique ascending dates from 2007-01-04, no null closes, meta
+`USD` / `NYSE` (`ARCX`). IEMG was also clean but its history starts in 2012. Diagnostics
+inspected dates and metadata only; no prices were printed or stored in the repo.

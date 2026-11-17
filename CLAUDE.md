@@ -17,7 +17,7 @@ OUT: real-time data, order execution, broker integrations, personal/real portfol
 investment advice. Include a disclaimer in README: educational project, not financial advice.
 
 ## Universe (config/universe.yaml, editable)
-Core ETFs: SPY, QQQ, IWM (equity), EFA, EEM (intl equity), TLT, IEF, LQD (bonds), GLD (gold),
+Core ETFs: SPY, QQQ, IWM (equity), EFA, VWO (intl equity), TLT, IEF, LQD (bonds), GLD (gold),
 XLE, XLK, XLF, XLV (sectors). Cap the universe at ~15 tickers in v1 (free API limits).
 Optional later: S&P 500 constituents.
 
