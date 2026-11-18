@@ -12,7 +12,7 @@ from typing import Any
 
 import duckdb
 
-from mrm.storage.models import Asset, MacroObservation, PriceBar
+from mrm.storage.models import Asset, Finding, MacroObservation, PriceBar
 
 PRICE_SOURCE = "twelvedata"
 MACRO_SOURCE = "fred"
@@ -235,3 +235,24 @@ def log_ingestion(
         [source, entity, date_from, date_to, rows_loaded, status, message, utc_now()],
     )
     return int(row.fetchone()[0])
+
+
+DQ_SEVERITIES: tuple[str, ...] = ("critical", "warning", "info")
+
+
+def insert_dq_results(
+    con: duckdb.DuckDBPyConnection, run_id: str, findings: Sequence[Finding]
+) -> int:
+    """Append the findings of one data quality run (one transaction). Returns rows written."""
+    bad = {f.severity for f in findings} - set(DQ_SEVERITIES)
+    if bad:
+        raise ValueError(f"invalid severity {sorted(bad)}; expected one of {DQ_SEVERITIES}")
+    if not findings:
+        return 0
+    run_at = utc_now()
+    params = [
+        [run_id, run_at, f.check, f.entity, f.severity, f.n_affected, f.detail] for f in findings
+    ]
+    sql = "INSERT INTO dq_results VALUES (?, ?, ?, ?, ?, ?, ?)"
+    _run_in_transaction(con, [(sql, params, True)])
+    return len(params)

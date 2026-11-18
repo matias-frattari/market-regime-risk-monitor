@@ -7,7 +7,7 @@ checked in the loaders and tests instead.
 
 import duckdb
 
-TABLES: tuple[str, ...] = ("dim_asset", "raw_prices", "raw_macro", "ingest_log")
+TABLES: tuple[str, ...] = ("dim_asset", "raw_prices", "raw_macro", "ingest_log", "dq_results")
 
 DDL: tuple[str, ...] = (
     """
@@ -53,6 +53,18 @@ DDL: tuple[str, ...] = (
         status      VARCHAR   NOT NULL CHECK (status IN ('success', 'no_data', 'error')),
         message     VARCHAR,
         logged_at   TIMESTAMP NOT NULL  -- UTC
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS dq_results (
+        run_id      VARCHAR   NOT NULL,
+        run_at      TIMESTAMP NOT NULL,  -- UTC
+        check_name  VARCHAR   NOT NULL,
+        entity      VARCHAR   NOT NULL,
+        severity    VARCHAR   NOT NULL CHECK (severity IN ('critical', 'warning', 'info')),
+        n_affected  INTEGER   NOT NULL,
+        detail      VARCHAR,
+        PRIMARY KEY (run_id, check_name, entity, severity)
     )
     """,
 )

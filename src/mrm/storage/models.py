@@ -40,3 +40,17 @@ class MacroSeries:
 
     series_id: str
     overlap_days: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class Finding:
+    """One data quality finding, aggregated per (check, entity, severity).
+
+    ``detail`` holds dates and counts only; it must never contain URLs or API keys.
+    """
+
+    check: str
+    entity: str
+    severity: str
+    n_affected: int
+    detail: str
