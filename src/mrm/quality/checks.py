@@ -1,4 +1,5 @@
-"""Data quality checks over ``raw_prices`` and ``raw_macro``.
+"""Data quality checks over ``prices_clean`` (``raw_prices`` + documented adjustments) and
+``raw_macro``.
 
 Each check is ``(con, cfg, today) -> list[Finding]`` and only reads the warehouse.
 Findings are aggregated per (check, entity, severity): ``n_affected`` counts the rows/dates
@@ -47,7 +48,7 @@ def check_price_duplicates(
     con: duckdb.DuckDBPyConnection,
     cfg: DataQualityConfig,
     today: date,
-    table: str = "raw_prices",
+    table: str = "prices_clean",
 ) -> list[Finding]:
     """Critical: more than one row per (ticker, trade_date). The PK prevents it today; this
     guards against schema changes. ``table`` is a fixed identifier, never user input."""
@@ -69,7 +70,7 @@ def check_price_non_positive(
 ) -> list[Finding]:
     """Critical: any open/high/low/close <= 0."""
     rows = con.execute(
-        "SELECT ticker, trade_date FROM raw_prices "
+        "SELECT ticker, trade_date FROM prices_clean "
         "WHERE close <= 0 OR open <= 0 OR high <= 0 OR low <= 0 ORDER BY ticker, trade_date"
     ).fetchall()
     by_ticker: dict[str, list[str]] = defaultdict(list)
@@ -111,7 +112,7 @@ def check_price_missing_dates(
     """
     closures = cfg.special_closures
     dates: dict[str, set[date]] = defaultdict(set)
-    for ticker, day in con.execute("SELECT ticker, trade_date FROM raw_prices").fetchall():
+    for ticker, day in con.execute("SELECT ticker, trade_date FROM prices_clean").fetchall():
         dates[ticker].add(day)
 
     findings: list[Finding] = []
@@ -151,7 +152,7 @@ def check_price_extreme_returns(
     """|simple daily return| above ``extreme_return_abs``: warning, or info inside a known
     stress window. Detail: the count plus the ``extreme_return_top_n`` largest moves."""
     prices = _series_by_key(
-        con, "SELECT ticker, trade_date, close FROM raw_prices ORDER BY ticker, trade_date"
+        con, "SELECT ticker, trade_date, close FROM prices_clean ORDER BY ticker, trade_date"
     )
     findings: list[Finding] = []
     for ticker, rows in sorted(prices.items()):
@@ -191,7 +192,7 @@ def check_price_staleness(
     reference = last_nyse_business_day(today, closures)
     rows = con.execute(
         "SELECT a.ticker, max(p.trade_date) FROM dim_asset a "
-        "LEFT JOIN raw_prices p USING (ticker) GROUP BY a.ticker ORDER BY a.ticker"
+        "LEFT JOIN prices_clean p USING (ticker) GROUP BY a.ticker ORDER BY a.ticker"
     ).fetchall()
     findings: list[Finding] = []
     for ticker, last in rows:
@@ -208,6 +209,46 @@ def check_price_staleness(
             )
             findings.append(Finding("price_staleness", ticker, CRITICAL, lag, detail))
     return findings
+
+
+def check_price_adjustments(
+    con: duckdb.DuckDBPyConnection, cfg: DataQualityConfig, today: date
+) -> list[Finding]:
+    """Status of each documented price adjustment (``price_adjustment_status``).
+
+    Info: applied (raw ex-date return above its threshold). Warning: not applied, because
+    the raw return is at or below the threshold (the provider may have fixed its data) or
+    because the ex-date or the trading day before it is missing in ``raw_prices``.
+    """
+    rows = con.execute(
+        "SELECT ticker, adjustment_id, ex_date, multiplier, apply_if_raw_return_above, "
+        "prev_close, ex_close, raw_return, applied "
+        "FROM price_adjustment_status ORDER BY ticker, ex_date"
+    ).fetchall()
+    grouped: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for ticker, aid, ex_date, mult, threshold, prev_close, ex_close, raw_return, applied in rows:
+        if applied:
+            note = (
+                f"applied ×{mult:g} before {ex_date}; "
+                f"raw return {raw_return:+.2%} > {threshold:.0%} ({aid})"
+            )
+            grouped[(ticker, INFO)].append(note)
+        elif ex_close is None:
+            note = f"ex_date {ex_date} missing in raw_prices; adjustment skipped ({aid})"
+            grouped[(ticker, WARNING)].append(note)
+        elif prev_close is None:
+            note = f"no trading day before ex_date {ex_date}; adjustment skipped ({aid})"
+            grouped[(ticker, WARNING)].append(note)
+        else:
+            note = (
+                f"raw return on {ex_date} {raw_return:+.2%} <= {threshold:.0%}: provider may "
+                f"have fixed the data; adjustment skipped ({aid})"
+            )
+            grouped[(ticker, WARNING)].append(note)
+    return [
+        Finding("price_adjustments", ticker, severity, len(notes), "; ".join(notes))
+        for (ticker, severity), notes in sorted(grouped.items())
+    ]
 
 
 # --- macro ---------------------------------------------------------------------------------
@@ -304,7 +345,7 @@ def check_future_dates(
 ) -> list[Finding]:
     """Critical: any price or macro row dated after ``today``."""
     rows = con.execute(
-        "SELECT 'raw_prices', ticker, trade_date FROM raw_prices WHERE trade_date > $1 "
+        "SELECT 'prices_clean', ticker, trade_date FROM prices_clean WHERE trade_date > $1 "
         "UNION ALL "
         "SELECT 'raw_macro', series_id, obs_date FROM raw_macro WHERE obs_date > $1 "
         "ORDER BY 1, 2, 3",
@@ -325,6 +366,7 @@ ALL_CHECKS: tuple[Check, ...] = (
     check_price_missing_dates,
     check_price_extreme_returns,
     check_price_staleness,
+    check_price_adjustments,
     check_macro_freshness,
     check_macro_gaps,
     check_future_dates,

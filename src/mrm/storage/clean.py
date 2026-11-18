@@ -5,19 +5,28 @@ reversible corrections, one row per raw row, nothing imputed) -> ``*_asof`` view
 (point-in-time, publication lags; not built yet).
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import duckdb
 
 from mrm.config import load_price_adjustments
 from mrm.storage.loaders import sync_price_adjustments
+from mrm.storage.models import PriceAdjustment
 from mrm.storage.schema import create_schema
 
 
-def prepare_clean_prices(con: duckdb.DuckDBPyConnection, path: Path | None = None) -> int:
-    """Create the schema (incl. ``prices_clean``) and sync ``config/price_adjustments.yaml``.
+def prepare_clean_prices(
+    con: duckdb.DuckDBPyConnection,
+    path: Path | None = None,
+    adjustments: Sequence[PriceAdjustment] | None = None,
+) -> int:
+    """Create the schema (incl. ``prices_clean``) and sync ``config/price_adjustments.yaml``
+    (or the given ``adjustments``, for tests).
 
-    Returns the number of configured adjustments. Call before reading ``prices_clean``.
+    Returns the number of adjustments synced. Call before reading ``prices_clean``.
+    Raises ValueError on a malformed config, before anything is written.
     """
+    items = load_price_adjustments(path) if adjustments is None else adjustments
     create_schema(con)
-    return sync_price_adjustments(con, load_price_adjustments(path))
+    return sync_price_adjustments(con, items)

@@ -12,6 +12,7 @@ from mrm.quality.checks import (
     check_future_dates,
     check_macro_freshness,
     check_macro_gaps,
+    check_price_adjustments,
     check_price_duplicates,
     check_price_extreme_returns,
     check_price_missing_dates,
@@ -20,8 +21,14 @@ from mrm.quality.checks import (
     run_checks,
 )
 from mrm.quality.report import exit_code
-from mrm.storage.loaders import insert_dq_results, upsert_assets, upsert_macro, upsert_prices
-from mrm.storage.models import Asset, Finding, MacroObservation, PriceBar
+from mrm.storage.loaders import (
+    insert_dq_results,
+    sync_price_adjustments,
+    upsert_assets,
+    upsert_macro,
+    upsert_prices,
+)
+from mrm.storage.models import Asset, Finding, MacroObservation, PriceAdjustment, PriceBar
 
 TODAY = date(2026, 11, 18)  # Wednesday
 START = date(2026, 10, 1)
@@ -244,7 +251,7 @@ def test_future_dates_are_critical(con: duckdb.DuckDBPyConnection) -> None:
     upsert_macro(con, [MacroObservation("NFCI", date(2026, 12, 4), 0.0)])
     found = by_key(check_future_dates(con, CFG, TODAY))
     assert set(found) == {
-        ("future_dates", "raw_prices:SPY", "critical"),
+        ("future_dates", "prices_clean:SPY", "critical"),
         ("future_dates", "raw_macro:NFCI", "critical"),
     }
 
@@ -262,7 +269,7 @@ def test_main_clean_run_exit_0_and_summary_row(
     con: duckdb.DuckDBPyConnection, capsys: pytest.CaptureFixture[str]
 ) -> None:
     load_clean(con)
-    assert run.main([], con=con, cfg=CFG, today=TODAY) == 0
+    assert run.main([], con=con, cfg=CFG, today=TODAY, adjustments=[]) == 0
     rows = dq_rows(con)
     assert [(r[1], r[2], r[3], r[4]) for r in rows] == [("run", "all", "info", 0)]
     assert "PASS: critical=0 warning=0 info=0" in capsys.readouterr().out
@@ -271,7 +278,7 @@ def test_main_clean_run_exit_0_and_summary_row(
 def test_main_warnings_only_exit_0(con: duckdb.DuckDBPyConnection) -> None:
     load_clean(con)
     upsert_macro(con, [MacroObservation("DGS10", date(2024, 11, 12), None)])  # unexplained
-    assert run.main([], con=con, cfg=CFG, today=TODAY) == 0
+    assert run.main([], con=con, cfg=CFG, today=TODAY, adjustments=[]) == 0
     assert ("macro_gaps", "DGS10", "warning", 1) in [r[1:] for r in dq_rows(con)]
 
 
@@ -280,9 +287,9 @@ def test_main_critical_exit_1_and_persisted(
 ) -> None:
     load_clean(con)
     upsert_prices(con, bars("SPY", [TODAY + timedelta(days=1)]))
-    assert run.main([], con=con, cfg=CFG, today=TODAY) == 1
+    assert run.main([], con=con, cfg=CFG, today=TODAY, adjustments=[]) == 1
     rows = [r[1:] for r in dq_rows(con)]
-    assert ("future_dates", "raw_prices:SPY", "critical", 1) in rows
+    assert ("future_dates", "prices_clean:SPY", "critical", 1) in rows
     assert ("run", "all", "info", 1) in rows
     out = capsys.readouterr().out
     assert "CRITICAL (1)" in out and "FAIL: critical=1" in out
@@ -290,14 +297,14 @@ def test_main_critical_exit_1_and_persisted(
 
 def test_each_run_gets_its_own_run_id(con: duckdb.DuckDBPyConnection) -> None:
     load_clean(con)
-    run.main([], con=con, cfg=CFG, today=TODAY)
-    run.main([], con=con, cfg=CFG, today=TODAY)
+    run.main([], con=con, cfg=CFG, today=TODAY, adjustments=[])
+    run.main([], con=con, cfg=CFG, today=TODAY, adjustments=[])
     assert len({r[0] for r in dq_rows(con)}) == 2
 
 
 def test_main_no_save_writes_nothing(con: duckdb.DuckDBPyConnection) -> None:
     load_clean(con)
-    assert run.main(["--no-save"], con=con, cfg=CFG, today=TODAY) == 0
+    assert run.main(["--no-save"], con=con, cfg=CFG, today=TODAY, adjustments=[]) == 0
     assert dq_rows(con) == []
 
 
@@ -311,7 +318,7 @@ def test_report_never_prints_api_keys(
     monkeypatch.setenv("TWELVEDATA_API_KEY", secret)
     load_clean(con)
     upsert_macro(con, [MacroObservation("DGS10", date(2024, 11, 12), None)])
-    run.main([], con=con, cfg=CFG, today=TODAY)
+    run.main([], con=con, cfg=CFG, today=TODAY, adjustments=[])
     assert secret not in capsys.readouterr().out
     details = " ".join(str(r) for r in con.execute("SELECT * FROM dq_results").fetchall())
     assert secret not in details
@@ -320,3 +327,81 @@ def test_report_never_prints_api_keys(
 def test_insert_dq_results_rejects_unknown_severity(con: duckdb.DuckDBPyConnection) -> None:
     with pytest.raises(ValueError, match="severity"):
         insert_dq_results(con, "r", [Finding("x", "y", "fatal", 1, "")])
+
+
+# --- price adjustments / prices_clean (SYNTHETIC) -----------------------------------------
+
+EX = date(2016, 9, 19)
+EX_DAYS = [date(2016, 9, 14), date(2016, 9, 15), date(2016, 9, 16), EX, date(2016, 9, 20)]
+
+
+def adj(aid: str = "xlf-synthetic", ex: date = EX, multiplier: float = 1.2) -> PriceAdjustment:
+    return PriceAdjustment(aid, "XLF", ex, multiplier, 0.10, "SYNTHETIC", ("SYNTHETIC",))
+
+
+def load_xlf(con: duckdb.DuckDBPyConnection, closes: list[float]) -> None:
+    """SYNTHETIC — XLF-shaped series with an optional spurious jump on EX."""
+    upsert_prices(con, bars("XLF", EX_DAYS, closes))
+
+
+def test_adjustment_applied_is_info_and_removes_extreme_return(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    load_xlf(con, [10.0, 10.1, 10.0, 12.0, 12.0])  # +20% spurious jump
+    assert by_key(check_price_extreme_returns(con, CFG, TODAY))  # raw view: flagged
+    sync_price_adjustments(con, [adj()])
+    (finding,) = check_price_adjustments(con, CFG, TODAY)
+    assert (finding.check, finding.entity, finding.severity, finding.n_affected) == (
+        "price_adjustments",
+        "XLF",
+        "info",
+        1,
+    )
+    assert finding.detail.startswith("applied ×1.2 before 2016-09-19; raw return +20.00% > 10%")
+    assert check_price_extreme_returns(con, CFG, TODAY) == []  # reads prices_clean
+
+
+def test_adjustment_not_applied_is_warning(con: duckdb.DuckDBPyConnection) -> None:
+    load_xlf(con, [10.0, 10.1, 10.0, 10.06, 10.1])  # provider already continuous
+    sync_price_adjustments(con, [adj()])
+    (finding,) = check_price_adjustments(con, CFG, TODAY)
+    assert finding.severity == "warning"
+    assert "+0.60% <= 10%: provider may have fixed the data" in finding.detail
+
+
+def test_adjustment_missing_ex_date_is_warning(con: duckdb.DuckDBPyConnection) -> None:
+    load_xlf(con, [10.0, 10.1, 10.0, 12.0, 12.0])
+    sync_price_adjustments(con, [adj(ex=date(2016, 9, 21))])  # no bar on that date
+    (finding,) = check_price_adjustments(con, CFG, TODAY)
+    assert finding.severity == "warning"
+    assert "ex_date 2016-09-21 missing in raw_prices" in finding.detail
+
+
+def test_adjustment_missing_previous_day_is_warning(con: duckdb.DuckDBPyConnection) -> None:
+    load_xlf(con, [10.0, 10.1, 10.0, 12.0, 12.0])
+    sync_price_adjustments(con, [adj(ex=EX_DAYS[0])])  # first bar: nothing before it
+    (finding,) = check_price_adjustments(con, CFG, TODAY)
+    assert finding.severity == "warning"
+    assert "no trading day before ex_date 2016-09-14" in finding.detail
+
+
+def test_adjustments_aggregate_per_ticker_and_severity(con: duckdb.DuckDBPyConnection) -> None:
+    load_xlf(con, [10.0, 12.0, 12.0, 18.0, 18.0])  # +20% on 09-15 and +50% on EX
+    sync_price_adjustments(
+        con, [adj("a", EX_DAYS[1]), adj("b", EX, 1.5), adj("c", date(2016, 9, 21))]
+    )
+    found = by_key(check_price_adjustments(con, CFG, TODAY))
+    assert found[("price_adjustments", "XLF", "info")].n_affected == 2
+    assert found[("price_adjustments", "XLF", "warning")].n_affected == 1
+    assert insert_dq_results(con, "run-adj", list(found.values())) == 2  # no PK collision
+
+
+def test_main_syncs_adjustments_before_checks(
+    con: duckdb.DuckDBPyConnection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    load_clean(con)
+    load_xlf(con, [10.0, 10.1, 10.0, 12.0, 12.0])
+    assert run.main([], con=con, cfg=CFG, today=TODAY, adjustments=[adj()]) == 0
+    out = capsys.readouterr().out
+    assert "price_adjustments" in out and "applied ×1.2" in out
+    assert "price_extreme_returns" not in out
