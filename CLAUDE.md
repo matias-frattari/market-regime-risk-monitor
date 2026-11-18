@@ -48,6 +48,7 @@ Repo layout:
 config/            universe.yaml, portfolio.example.yaml, regimes.yaml
 src/mrm/ingest/    providers, FRED client, incremental loaders
 src/mrm/storage/   duckdb schema + helpers
+src/mrm/quality/   data quality checks (`mrm check`), NYSE/federal calendar
 src/mrm/metrics/   returns, vol, drawdown, VaR/CVaR, correlations, risk contribution
 src/mrm/regimes/   rules-based v1, unsupervised v2 (GMM/HMM), comparison
 src/mrm/portfolio/ equal weight, min-variance / max-Sharpe, HRP, backtest engine
@@ -68,7 +69,7 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 - Never commit: `.env`, API keys, `*.duckdb`, raw API dumps, notebooks with outputs holding keys.
 
 ## Data model (DuckDB)
-raw_prices, raw_macro, dim_asset, ingest_log, fact_returns, fact_risk_metrics, fact_regime,
+raw_prices, raw_macro, dim_asset, ingest_log, dq_results, fact_returns, fact_risk_metrics, fact_regime,
 fact_backtest_equity, fact_backtest_summary. Every table documented in docs/data_dictionary.md.
 
 ## Metric definitions (document formulas in docs/methodology.md)
@@ -117,5 +118,9 @@ live Tableau Public link; methodology and limitations documented.
   (~8 s between tickers, ~100 s for the full universe; `--dry-run` calls the API but writes nothing)
 - ingest macro: `uv run python -m mrm.ingest.macro [--series DGS10,NFCI] [--dry-run]`
   (~1 s between series; `--dry-run` calls the API, requests full history, writes nothing)
+- `uv run mrm ingest prices|macro [...]` is an alias of the two `python -m` commands above
+  (same options and exit codes)
+- data quality: `uv run mrm check [--no-save]` (thresholds in config/data_quality.yaml; prints
+  the report by severity, appends to `dq_results`; exit 1 only on critical findings)
 - test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - export: TBD
