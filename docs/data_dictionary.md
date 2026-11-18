@@ -10,6 +10,18 @@ Conventions:
 - **Licensing:** `raw_prices` stays in the local warehouse only. Prices and daily per-ticker
   returns are never exported or committed (see `docs/decisions/0001-price-provider.md`).
 
+## Data layers
+
+| Layer | Objects | Rule |
+|---|---|---|
+| `raw_*` | tables `raw_prices`, `raw_macro` | Provider data exactly as loaded. Only the ingestion writes here |
+| `*_clean` | view `prices_clean` | Documented, reversible corrections (from `config/`). One row per raw row, nothing imputed |
+| `*_asof` | `macro_asof` (**pending**) | Point-in-time: publication lags plus forward-fill, aligned to the trading days of `prices_clean` |
+
+Everything downstream (metrics, regimes, portfolio, exports, data quality checks on prices)
+reads `*_clean` / `*_asof`, **never** `raw_*`. There is no `macro_clean` yet: macro values
+need no correction today, so `macro_asof` will read `raw_macro` directly.
+
 ## Warehouse tables
 
 ### `dim_asset`
@@ -124,7 +136,7 @@ PK: `(run_id, check_name, entity, severity)`.
 | run_id | VARCHAR | no | Random id of the run (12 hex chars), printed by the CLI |
 | run_at | TIMESTAMP | no | Run time (UTC) |
 | check_name | VARCHAR | no | Check id (see below), or `run` for the per-run summary row |
-| entity | VARCHAR | no | Ticker, FRED series id, `<table>:<entity>` for `future_dates`, `all` for `run` |
+| entity | VARCHAR | no | Ticker, FRED series id, `<table>:<entity>` for `future_dates` (`prices_clean:SPY`, `raw_macro:NFCI`), `all` for `run` |
 | severity | VARCHAR | no | `critical`, `warning` or `info` (CHECK constraint) |
 | n_affected | INTEGER | no | Dates/rows involved (days of lag for staleness, age in days for freshness) |
 | detail | VARCHAR | yes | Dates and counts, truncated after 10 items; never URLs or API keys |
@@ -135,25 +147,81 @@ one ticker form one warning row and the dates go in `detail`. Every run also wri
 Kept separate from `ingest_log` because the grain (a finding, not a load attempt) and the
 status values (severities) differ.
 
+### `price_adjustments`
+Documented corrections of provider-adjusted prices, synced from `config/price_adjustments.yaml`
+by `mrm.storage.clean.prepare_clean_prices` (delete + insert, one transaction; run by
+`mrm check`). The yaml is the source of truth and holds the derivation and sources; the table
+holds only what the views need. PK: `adjustment_id`. Decision:
+`docs/decisions/0003-xlf-special-distribution-adjustment.md`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| adjustment_id | VARCHAR | no | Id from the yaml (e.g. `xlf-2016-09-19-xlre-spinoff`) |
+| ticker | VARCHAR | no | Ticker to correct |
+| ex_date | DATE | no | Prices strictly **before** this date are multiplied |
+| multiplier | DOUBLE | no | Factor for open/high/low/close (> 0, CHECK constraint) |
+| apply_if_raw_return_above | DOUBLE | no | Apply only while the raw return on `ex_date` is above this |
+| synced_at | TIMESTAMP | no | Sync time (UTC) |
+
+Removing an entry from the yaml and running `mrm check` reverts the correction; `raw_prices`
+is never modified.
+
+## Warehouse views
+
+Created by `create_schema` with `CREATE OR REPLACE VIEW`.
+
+### `price_adjustment_status`
+One row per `price_adjustments` row, with the raw return on its `ex_date` and whether the
+adjustment currently applies. Evaluated on every query, so a provider fix turns an adjustment
+off after the next reload with no config change.
+
+| Column | Type | Description |
+|---|---|---|
+| adjustment_id, ticker, ex_date, multiplier, apply_if_raw_return_above | | From `price_adjustments` |
+| prev_date, prev_close | DATE, DOUBLE | Previous stored trading day of the ticker in `raw_prices` and its close (NULL if none) |
+| ex_close | DOUBLE | `raw_prices` close on `ex_date` (NULL if the date is missing) |
+| raw_return | DOUBLE | `ex_close / prev_close − 1` (NULL if either is missing) |
+| applied | BOOLEAN | `raw_return > apply_if_raw_return_above`; false when `raw_return` is NULL |
+
+### `prices_clean`
+`raw_prices` with applied adjustments. **Read prices from here, never from `raw_prices`.**
+Same rows and key as `raw_prices` (`(ticker, trade_date)`).
+
+| Column | Type | Description |
+|---|---|---|
+| ticker, trade_date | VARCHAR, DATE | As in `raw_prices` |
+| open, high, low, close | DOUBLE | Raw value × `adjustment_factor` |
+| volume | BIGINT | As in `raw_prices`, **never corrected** (ADR 0003: the provider already rescaled pre-ex-date XLF volume with a different, undocumented factor; no metric uses volume) |
+| source, ingested_at | VARCHAR, TIMESTAMP | As in `raw_prices` |
+| adjustment_factor | DOUBLE | Product of the multipliers of applied adjustments whose `ex_date` is after `trade_date`; 1.0 when none |
+| adjustment_ids | VARCHAR | Comma-separated ids of those adjustments (ordered by `ex_date`); NULL when none |
+
+Today one adjustment applies: XLF ×1.18729 on 2444 rows (2007-01-04..2016-09-16). The XLF
+return on 2016-09-19 is +19.56% in `raw_prices` and +0.70% in `prices_clean`.
+
 ## Data quality checks (`uv run mrm check`)
 
-Checks only read `raw_prices`, `raw_macro` and `dim_asset`. They never impute or modify data:
-exceptions in the config only reclassify a finding (warning → info).
+`mrm check` first prepares the clean layer (schema plus sync of
+`config/price_adjustments.yaml`). The checks then read `prices_clean`, `raw_macro`,
+`dim_asset` and `price_adjustment_status`. They never impute or modify data: exceptions in
+the config only reclassify a finding (warning → info). An invalid
+`config/data_quality.yaml` or `config/price_adjustments.yaml` exits with code 2.
 Thresholds and exceptions: `config/data_quality.yaml`. Code: `src/mrm/quality/`.
 "Today" is the current date in New York. Exit code: `1` if any finding is critical, else `0`
 (`2` for an invalid config). `--no-save` prints the report without writing `dq_results`.
 
 | Check | Table | Severity | Rule (config key) |
 |---|---|---|---|
-| `price_duplicates` | raw_prices | critical | More than one row per `(ticker, trade_date)`. The PK prevents it today; the check guards against schema changes |
-| `price_non_positive` | raw_prices | critical | `open`, `high`, `low` or `close` ≤ 0 |
-| `price_missing_dates` | raw_prices | critical / warning | NYSE trading days missing between each ticker's **own** first and last date. A run of consecutive missing days longer than `prices.max_missing_gap_days` is critical, shorter runs are warnings |
-| `price_non_trading_dates` | raw_prices | warning | Bars dated on a weekend, an NYSE holiday or a special closure |
-| `price_extreme_returns` | raw_prices | warning / info | \|close/prev close − 1\| > `prices.extreme_return_abs`. Inside a `prices.known_extreme_returns` window it is info. Detail: count plus the `extreme_return_top_n` largest moves |
-| `price_staleness` | dim_asset + raw_prices | critical | Last bar more than `prices.stale_after_business_days` NYSE trading days behind the **last trading day** (a Saturday run compares against Friday). A universe ticker with no bars is critical too |
+| `price_duplicates` | prices_clean | critical | More than one row per `(ticker, trade_date)`. The PK prevents it today; the check guards against schema changes |
+| `price_non_positive` | prices_clean | critical | `open`, `high`, `low` or `close` ≤ 0 |
+| `price_missing_dates` | prices_clean | critical / warning | NYSE trading days missing between each ticker's **own** first and last date. A run of consecutive missing days longer than `prices.max_missing_gap_days` is critical, shorter runs are warnings |
+| `price_non_trading_dates` | prices_clean | warning | Bars dated on a weekend, an NYSE holiday or a special closure |
+| `price_extreme_returns` | prices_clean | warning / info | \|close/prev close − 1\| > `prices.extreme_return_abs`. Inside a `prices.known_extreme_returns` window it is info. Detail: count plus the `extreme_return_top_n` largest moves |
+| `price_staleness` | dim_asset + prices_clean | critical | Last bar more than `prices.stale_after_business_days` NYSE trading days behind the **last trading day** (a Saturday run compares against Friday). A universe ticker with no bars is critical too |
+| `price_adjustments` | price_adjustment_status | info / warning | Info when an adjustment applies. Warning when it is skipped: raw ex-date return ≤ `apply_if_raw_return_above` (the provider may have fixed its data; review and remove the yaml entry), or the ex-date / previous trading day is missing in `raw_prices` |
 | `macro_freshness` | raw_macro | critical / warning | Last **non-missing** observation older than `macro.max_age_days[<frequency>]` calendar days (frequency from `macro.series_frequency`). A configured series with no data is critical. A stored series without a configured frequency is a warning |
 | `macro_gaps` | raw_macro | info / warning | Each FRED missing value (`'.'`, stored as NULL) is classified; see below |
-| `future_dates` | both | critical | `trade_date` or `obs_date` after today |
+| `future_dates` | prices_clean + raw_macro | critical | `trade_date` or `obs_date` after today |
 
 **Classification of FRED missing values (`macro_gaps`).** Nothing is imputed: NULLs stay NULL.
 1. Listed in `macro.known_gaps` → info (*known gap*, with its reason). Today:
@@ -176,10 +244,15 @@ national days of mourning and hurricanes, live in `calendar.special_closures`.
 local warehouse. Over 2007-01-04 → 2026-11-17 the only differences are the 4 listed special
 closures. The test is skipped when the warehouse is absent (CI).
 
-**Known finding (2026-11-18).** XLF +19.56% on 2016-09-19 is reported as a warning. That is
-the date the Real Estate sector was spun off into XLRE, through a special distribution. The
-`adjust=all` close from Twelve Data does not seem to absorb it. It is left visible on purpose,
-not added as an exception.
+**Known finding (2026-11-18, resolved in Phase 1.5).** In `raw_prices`, XLF jumps +19.56% on
+2016-09-19, the ex-date of the special distribution of XLRE shares (Real Estate spin-off).
+Twelve Data's `adjust=all` mis-adjusts that distribution: the unadjusted price falls 18.25%,
+in line with the USD 4.44356 distribution.
+- It is corrected in `prices_clean` (×1.18729 before the ex-date, applied conditionally). The
+  clean return on 2016-09-19 is +0.70%.
+- No exception was added to `config/data_quality.yaml`. `mrm check` now reports
+  `price_adjustments XLF` as info instead of the extreme-return warning.
+- Derivation, sources, risks and how to revert: ADR 0003.
 
 ## Macro look-ahead risk (documentation only)
 
@@ -200,7 +273,8 @@ look-ahead (`docs/methodology.md`). The publication lag applied per series is de
 regime-model phase, not here.
 
 **Pending:** a forward-filled, publication-lagged macro view (no look-ahead) does **not**
-exist yet. It will be created with the lag decision above.
+exist yet. It will be the `macro_asof` view of the `*_asof` layer (see "Data layers"), built on
+the trading days of `prices_clean` once the lags above are decided.
 
 ## CSV exports (`data/exports/`)
 

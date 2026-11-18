@@ -63,6 +63,49 @@ validate → `upsert_macro` → `log_ingestion`.
 - **Exit codes:** 0 no series failed; 1 at least one `error`; 2 usage/config error (unknown or
   copyrighted series, missing key).
 
+## Data layers
+
+```
+ingest ──► raw_*  (tables)      provider data as loaded; only the ingestion writes here
+             │
+             ▼
+           *_clean (views)       documented, reversible corrections from config/; no imputation
+             │                   prices_clean = raw_prices + config/price_adjustments.yaml
+             ▼
+           *_asof  (views)       point-in-time: publication lags + forward-fill (pending)
+             │                   macro_asof = raw_macro + lags, on the prices_clean trading days
+             ▼
+   metrics / regimes / portfolio / exports / data quality checks
+```
+
+**Rule: everything after the ingestion reads `*_clean` / `*_asof`, never `raw_*`.**
+`raw_*` stays the provider's data so that every correction is visible, testable and can be
+reverted by editing config. The data quality checks on prices also read `prices_clean`.
+`macro_asof` is not built yet; macro values need no correction today, so it will read
+`raw_macro` directly.
+
+The clean layer is prepared by `mrm.storage.clean.prepare_clean_prices(con)`. It creates the
+schema (tables and views) and syncs `config/price_adjustments.yaml` into `price_adjustments`.
+Call it before reading `prices_clean`; `mrm check` does so first. The ingestion does not call
+it and is unchanged.
+
+**Conditional corrections.** An adjustment applies only while the raw data still shows the
+error (raw return on the ex-date above a configured threshold), evaluated inside the view on
+every query. If the provider fixes its data, the correction stops applying by itself and
+`mrm check` reports a warning. See `docs/decisions/0003-xlf-special-distribution-adjustment.md`.
+
+## Data quality (`src/mrm/quality/`, `uv run mrm check`)
+
+| Module | Role |
+|---|---|
+| `calendar.py` | NYSE and federal holiday rules (pure Python); special closures come from config |
+| `checks.py` | Read-only checks over `prices_clean`, `raw_macro`, `dim_asset`, `price_adjustment_status`; one `Finding` per (check, entity, severity) |
+| `report.py` | Console report by severity, summary row, exit code (1 only on critical) |
+| `run.py` | CLI: prepares the clean layer, runs the checks, appends to `dq_results` |
+
+Check rules and thresholds: `docs/data_dictionary.md`, "Data quality checks".
+`src/mrm/cli.py` dispatches `mrm ingest prices|macro` and `mrm check` to the module entry points.
+
 ## Runtime dependencies
 
 | Library | Why |

@@ -100,3 +100,10 @@ EEM was replaced by **VWO** (Vanguard FTSE Emerging Markets, same `equity_intl` 
 passed validation: 5000 bars, unique ascending dates from 2007-01-04, no null closes, meta
 `USD` / `NYSE` (`ARCX`). IEMG was also clean but its history starts in 2012. Diagnostics
 inspected dates and metadata only; no prices were printed or stored in the repo.
+
+## Note (Phase 1.5, 2026-11-18): XLF special distribution mis-adjusted
+
+`adjust=all` mis-adjusts the XLF special distribution of XLRE shares (ex-date 2016-09-19):
+the adjusted series jumps +19.56% on the ex-date instead of being continuous. `raw_prices`
+keeps the provider data; the correction is applied in the `prices_clean` view, only while
+the provider's error is present. See `docs/decisions/0003-xlf-special-distribution-adjustment.md`.

@@ -45,7 +45,8 @@ ingest (Python) -> DuckDB warehouse -> metrics / regimes / portfolio modules -> 
 
 Repo layout:
 ```
-config/            universe.yaml, portfolio.example.yaml, regimes.yaml
+config/            universe.yaml, macro.yaml, data_quality.yaml, price_adjustments.yaml,
+                   portfolio.example.yaml, regimes.yaml
 src/mrm/ingest/    providers, FRED client, incremental loaders
 src/mrm/storage/   duckdb schema + helpers
 src/mrm/quality/   data quality checks (`mrm check`), NYSE/federal calendar
@@ -69,8 +70,17 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 - Never commit: `.env`, API keys, `*.duckdb`, raw API dumps, notebooks with outputs holding keys.
 
 ## Data model (DuckDB)
-raw_prices, raw_macro, dim_asset, ingest_log, dq_results, fact_returns, fact_risk_metrics, fact_regime,
-fact_backtest_equity, fact_backtest_summary. Every table documented in docs/data_dictionary.md.
+Tables: raw_prices, raw_macro, dim_asset, ingest_log, dq_results, price_adjustments, fact_returns,
+fact_risk_metrics, fact_regime, fact_backtest_equity, fact_backtest_summary.
+Views: price_adjustment_status, prices_clean; macro_asof (pending).
+Every table and view documented in docs/data_dictionary.md.
+
+Layers: `raw_*` (provider data, written only by ingestion) -> `*_clean` (documented, reversible
+corrections from config, no imputation) -> `*_asof` (point-in-time, publication lags).
+**Everything after ingestion reads `*_clean` / `*_asof`, never `raw_*`**: read prices from
+`prices_clean` (call `mrm.storage.clean.prepare_clean_prices(con)` first). Corrections go in
+`config/price_adjustments.yaml` with derivation, sources and an ADR (see ADR 0003); never edit
+`raw_prices`.
 
 ## Metric definitions (document formulas in docs/methodology.md)
 Daily log/simple returns; annualized vol (252d); rolling 60d vol; max drawdown;
