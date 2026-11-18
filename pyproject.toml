@@ -10,6 +10,9 @@ dependencies = [
     "requests>=2.34.2",
 ]
 
+[project.scripts]
+mrm = "mrm.cli:main"
+
 [dependency-groups]
 dev = ["ruff>=0.9", "pytest>=8.0", "hatchling>=1.25"]
 
