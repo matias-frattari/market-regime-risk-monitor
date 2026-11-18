@@ -1,6 +1,9 @@
 """Project paths and config-file loaders."""
 
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -9,6 +12,7 @@ from mrm.storage.models import Asset, MacroSeries
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH: Path = REPO_ROOT / "config" / "universe.yaml"
 MACRO_PATH: Path = REPO_ROOT / "config" / "macro.yaml"
+DATA_QUALITY_PATH: Path = REPO_ROOT / "config" / "data_quality.yaml"
 DEFAULT_OVERLAP_DAYS = 90
 FULL_RELOAD = "full"
 # Copyrighted on FRED (Cboe, ICE): never ingested. See docs/decisions/0002.
@@ -73,3 +77,130 @@ def load_macro_series(path: Path | None = None) -> list[MacroSeries]:
         seen.add(series_id)
         result.append(MacroSeries(series_id, _parse_overlap(entry.get("overlap_days"), series_id)))
     return result
+
+
+FREQUENCIES: tuple[str, ...] = ("daily", "weekly", "monthly")
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnException:
+    """Known stress window: extreme returns inside it are info, not warnings.
+
+    ``tickers`` empty means every ticker.
+    """
+
+    start: date
+    end: date
+    reason: str
+    tickers: frozenset[str] = frozenset()
+
+    def covers(self, ticker: str, day: date) -> bool:
+        return self.start <= day <= self.end and (not self.tickers or ticker in self.tickers)
+
+
+@dataclass(frozen=True, slots=True)
+class DataQualityConfig:
+    """Thresholds and documented exceptions of ``config/data_quality.yaml``."""
+
+    special_closures: dict[date, str]
+    max_missing_gap_days: int
+    extreme_return_abs: float
+    extreme_return_top_n: int
+    stale_after_business_days: int
+    known_extreme_returns: tuple[ReturnException, ...]
+    series_frequency: dict[str, str]
+    max_age_days: dict[str, int]
+    classify_gaps_from: date
+    known_gaps: dict[tuple[str, date], str]
+
+
+def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
+    value = raw.get(key)
+    if not isinstance(value, dict):
+        raise ValueError(f"data quality config needs a '{key}' mapping")
+    return value
+
+
+def _date(value: object, where: str) -> date:
+    if not isinstance(value, date):
+        raise ValueError(f"{where} must be a YYYY-MM-DD date")
+    return value
+
+
+def _int(value: object, where: str, minimum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{where} must be an integer >= {minimum}")
+    return value
+
+
+def _reason(entry: dict[str, Any], where: str) -> str:
+    reason = str(entry.get("reason") or "").strip()
+    if not reason:
+        raise ValueError(f"{where} needs a 'reason'")
+    return reason
+
+
+def _entries(section: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    entries = section.get(key) or []
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise ValueError(f"'{key}' must be a list of mappings")
+    return entries
+
+
+def load_data_quality_config(path: Path | None = None) -> DataQualityConfig:
+    """Load ``config/data_quality.yaml``. Raises ValueError on a malformed file."""
+    raw = yaml.safe_load((path or DATA_QUALITY_PATH).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("data quality config must be a mapping")
+    calendar, prices, macro = (_section(raw, k) for k in ("calendar", "prices", "macro"))
+
+    closures: dict[date, str] = {}
+    for entry in _entries(calendar, "special_closures"):
+        day = _date(entry.get("date"), "special_closures.date")
+        closures[day] = _reason(entry, f"special closure {day}")
+
+    threshold = prices.get("extreme_return_abs")
+    if isinstance(threshold, bool) or not isinstance(threshold, int | float) or threshold <= 0:
+        raise ValueError("prices.extreme_return_abs must be a number > 0")
+
+    exceptions: list[ReturnException] = []
+    for entry in _entries(prices, "known_extreme_returns"):
+        start = _date(entry.get("from"), "known_extreme_returns.from")
+        end = _date(entry.get("to"), "known_extreme_returns.to")
+        if end < start:
+            raise ValueError(f"known_extreme_returns window {start}..{end} ends before it starts")
+        tickers = frozenset(str(t).strip().upper() for t in entry.get("tickers") or [])
+        exceptions.append(ReturnException(start, end, _reason(entry, f"window {start}"), tickers))
+
+    frequency = macro.get("series_frequency")
+    if not isinstance(frequency, dict) or not frequency:
+        raise ValueError("macro.series_frequency must map series id -> frequency")
+    bad = {k: v for k, v in frequency.items() if v not in FREQUENCIES}
+    if bad:
+        raise ValueError(f"unknown frequency in macro.series_frequency: {bad}")
+    max_age = macro.get("max_age_days")
+    if not isinstance(max_age, dict) or set(max_age) != set(FREQUENCIES):
+        raise ValueError(f"macro.max_age_days must define exactly {', '.join(FREQUENCIES)}")
+
+    gaps: dict[tuple[str, date], str] = {}
+    for entry in _entries(macro, "known_gaps"):
+        series_id = str(entry.get("series") or "").strip().upper()
+        if not series_id:
+            raise ValueError("each known gap needs a 'series'")
+        day = _date(entry.get("date"), f"known gap of {series_id}")
+        gaps[(series_id, day)] = _reason(entry, f"known gap {series_id} {day}")
+
+    return DataQualityConfig(
+        special_closures=closures,
+        max_missing_gap_days=_int(prices.get("max_missing_gap_days"), "max_missing_gap_days", 1),
+        extreme_return_abs=float(threshold),
+        extreme_return_top_n=_int(prices.get("extreme_return_top_n"), "extreme_return_top_n", 1),
+        stale_after_business_days=_int(
+            prices.get("stale_after_business_days"), "stale_after_business_days", 0
+        ),
+        known_extreme_returns=tuple(exceptions),
+        series_frequency={str(k).upper(): v for k, v in frequency.items()},
+        max_age_days={k: _int(v, f"max_age_days.{k}", 1) for k, v in max_age.items()},
+        classify_gaps_from=_date(macro.get("classify_gaps_from"), "macro.classify_gaps_from"),
+        known_gaps=gaps,
+    )

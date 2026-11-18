@@ -1,0 +1,63 @@
+# Data quality checks (`uv run mrm check`) — thresholds and documented exceptions.
+# See docs/data_dictionary.md, section "Data quality checks". Nothing here imputes data:
+# exceptions only change how a finding is classified (warning -> info).
+
+calendar:
+  # One-off NYSE closures not covered by the holiday rules in mrm.quality.calendar.
+  # Also used to explain FRED missing values ('.') of daily series.
+  special_closures:
+    - {date: 1985-09-27, reason: "Hurricane Gloria"}
+    - {date: 1994-04-27, reason: "National day of mourning, President Nixon"}
+    - {date: 2001-09-11, reason: "September 11 attacks"}
+    - {date: 2001-09-12, reason: "September 11 attacks"}
+    - {date: 2001-09-13, reason: "September 11 attacks"}
+    - {date: 2001-09-14, reason: "September 11 attacks"}
+    - {date: 2004-06-11, reason: "National day of mourning, President Reagan"}
+    - {date: 2007-01-02, reason: "National day of mourning, President Ford"}
+    - {date: 2012-10-29, reason: "Hurricane Sandy"}
+    - {date: 2012-10-30, reason: "Hurricane Sandy"}
+    - {date: 2018-12-05, reason: "National day of mourning, President G. H. W. Bush"}
+    - {date: 2025-01-09, reason: "National day of mourning, President Carter"}
+
+prices:
+  # Missing NYSE trading days inside a ticker's own history (first to last date).
+  # A run of consecutive missing days longer than this is critical; shorter runs are warnings.
+  max_missing_gap_days: 3
+  # |simple daily return| above this is a warning (or info inside a known exception window).
+  extreme_return_abs: 0.15
+  # Largest cases per ticker shown in the report and stored in dq_results.detail.
+  extreme_return_top_n: 3
+  # Critical when the last bar is more than N NYSE trading days behind the last trading day.
+  stale_after_business_days: 3
+  # Known market-wide stress windows. `tickers` omitted = every ticker.
+  known_extreme_returns:
+    - {from: 2008-09-01, to: 2009-06-30, reason: "Global financial crisis"}
+    - {from: 2020-02-20, to: 2020-04-30, reason: "COVID-19 crash"}
+
+macro:
+  # Expected frequency of each FRED series (config/macro.yaml).
+  series_frequency:
+    DGS10: daily
+    DGS2: daily
+    T10Y2Y: daily
+    DGS3MO: daily
+    FEDFUNDS: monthly
+    CPIAUCSL: monthly
+    UNRATE: monthly
+    NFCI: weekly
+    STLFSI4: weekly
+  # Critical when the last non-missing observation is older than this (calendar days).
+  # Weekly: dated Friday, released the following Wednesday (up to ~12 days old).
+  # Monthly: dated the 1st, released 1-6 weeks after month end (up to ~72 days old).
+  max_age_days:
+    daily: 7
+    weekly: 16
+    monthly: 80
+  # FRED '.' values of daily series before this date are reported in aggregate (info), not
+  # classified one by one: pre-1986 bond-market holidays (Lincoln's Birthday, Election Day,
+  # fixed-date holidays before 1971) are not modelled by the calendar rules.
+  classify_gaps_from: 1986-01-01
+  # Missing values ('.') explained by a known event. Reported as info, never imputed.
+  known_gaps:
+    - {series: CPIAUCSL, date: 2025-10-01, reason: "Federal shutdown Oct-Nov 2025, BLS did not publish October"}
+    - {series: UNRATE, date: 2025-10-01, reason: "Federal shutdown Oct-Nov 2025, BLS did not publish October"}
