@@ -12,7 +12,7 @@ from typing import Any
 
 import duckdb
 
-from mrm.storage.models import Asset, Finding, MacroObservation, PriceBar
+from mrm.storage.models import Asset, Finding, MacroObservation, PriceAdjustment, PriceBar
 
 PRICE_SOURCE = "twelvedata"
 MACRO_SOURCE = "fred"
@@ -255,4 +255,19 @@ def insert_dq_results(
     ]
     sql = "INSERT INTO dq_results VALUES (?, ?, ?, ?, ?, ?, ?)"
     _run_in_transaction(con, [(sql, params, True)])
+    return len(params)
+
+
+def sync_price_adjustments(
+    con: duckdb.DuckDBPyConnection, adjustments: Sequence[PriceAdjustment]
+) -> int:
+    """Make ``price_adjustments`` equal to the config (delete + insert, one transaction)."""
+    now = utc_now()
+    params = [
+        [a.adjustment_id, a.ticker, a.ex_date, a.multiplier, a.apply_if_raw_return_above, now]
+        for a in adjustments
+    ]
+    steps: list[_Step] = [("DELETE FROM price_adjustments", [], False)]
+    steps.append(("INSERT INTO price_adjustments VALUES (?, ?, ?, ?, ?, ?)", params, True))
+    _run_in_transaction(con, steps)
     return len(params)

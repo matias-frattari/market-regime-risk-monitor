@@ -7,12 +7,13 @@ from typing import Any
 
 import yaml
 
-from mrm.storage.models import Asset, MacroSeries
+from mrm.storage.models import Asset, MacroSeries, PriceAdjustment
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH: Path = REPO_ROOT / "config" / "universe.yaml"
 MACRO_PATH: Path = REPO_ROOT / "config" / "macro.yaml"
 DATA_QUALITY_PATH: Path = REPO_ROOT / "config" / "data_quality.yaml"
+PRICE_ADJUSTMENTS_PATH: Path = REPO_ROOT / "config" / "price_adjustments.yaml"
 DEFAULT_OVERLAP_DAYS = 90
 FULL_RELOAD = "full"
 # Copyrighted on FRED (Cboe, ICE): never ingested. See docs/decisions/0002.
@@ -204,3 +205,54 @@ def load_data_quality_config(path: Path | None = None) -> DataQualityConfig:
         classify_gaps_from=_date(macro.get("classify_gaps_from"), "macro.classify_gaps_from"),
         known_gaps=gaps,
     )
+
+
+def _positive_number(value: object, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not value > 0:
+        raise ValueError(f"{where} must be a number > 0")
+    return float(value)
+
+
+def load_price_adjustments(path: Path | None = None) -> list[PriceAdjustment]:
+    """Load ``config/price_adjustments.yaml`` (``adjustments: [...]``, may be empty).
+
+    Raises ValueError on a malformed entry, a duplicated id, or a missing derivation/source.
+    """
+    raw = yaml.safe_load((path or PRICE_ADJUSTMENTS_PATH).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or "adjustments" not in raw:
+        raise ValueError("price adjustments file must hold an 'adjustments' list")
+    entries = _entries(raw, "adjustments")
+
+    result: list[PriceAdjustment] = []
+    seen: set[str] = set()
+    for entry in entries:
+        adjustment_id = str(entry.get("id") or "").strip()
+        if not adjustment_id:
+            raise ValueError("each price adjustment needs an 'id'")
+        if adjustment_id in seen:
+            raise ValueError(f"duplicated price adjustment id: {adjustment_id}")
+        seen.add(adjustment_id)
+        ticker = str(entry.get("ticker") or "").strip().upper()
+        if not ticker:
+            raise ValueError(f"price adjustment {adjustment_id} needs a 'ticker'")
+        derivation = str(entry.get("derivation") or "").strip()
+        if not derivation:
+            raise ValueError(f"price adjustment {adjustment_id} needs a 'derivation'")
+        sources = entry.get("sources")
+        if not isinstance(sources, list) or not all(str(s).strip() for s in sources) or not sources:
+            raise ValueError(f"price adjustment {adjustment_id} needs a non-empty 'sources' list")
+        result.append(
+            PriceAdjustment(
+                adjustment_id=adjustment_id,
+                ticker=ticker,
+                ex_date=_date(entry.get("ex_date"), f"{adjustment_id}.ex_date"),
+                multiplier=_positive_number(entry.get("multiplier"), f"{adjustment_id}.multiplier"),
+                apply_if_raw_return_above=_positive_number(
+                    entry.get("apply_if_raw_return_above"),
+                    f"{adjustment_id}.apply_if_raw_return_above",
+                ),
+                derivation=derivation,
+                sources=tuple(str(s).strip() for s in sources),
+            )
+        )
+    return result

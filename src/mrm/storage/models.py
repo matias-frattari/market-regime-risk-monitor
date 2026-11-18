@@ -54,3 +54,20 @@ class Finding:
     severity: str
     n_affected: int
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class PriceAdjustment:
+    """Documented correction of provider-adjusted prices (``config/price_adjustments.yaml``).
+
+    OHLC of ``ticker`` before ``ex_date`` are multiplied by ``multiplier`` while the raw
+    return on ``ex_date`` is above ``apply_if_raw_return_above``.
+    """
+
+    adjustment_id: str
+    ticker: str
+    ex_date: date
+    multiplier: float
+    apply_if_raw_return_above: float
+    derivation: str
+    sources: tuple[str, ...]

@@ -1,0 +1,30 @@
+# Documented corrections of provider-adjusted prices — see docs/decisions/0003.
+# raw_prices is never modified: corrections are applied by the prices_clean view.
+#
+# Each adjustment multiplies open/high/low/close of `ticker` on every date BEFORE `ex_date`
+# by `multiplier`, but ONLY while the raw simple return on `ex_date` (vs the previous stored
+# trading day) is above `apply_if_raw_return_above`. If the provider fixes its data, the raw
+# return falls below the threshold, the adjustment stops applying by itself and
+# `mrm check` reports a warning (no double adjustment). Volume is never corrected.
+
+adjustments:
+  - id: xlf-2016-09-19-xlre-spinoff
+    ticker: XLF
+    ex_date: 2016-09-19
+    multiplier: 1.18729
+    apply_if_raw_return_above: 0.10
+    derivation: >-
+      Special distribution of 0.139146 XLRE shares = USD 4.44356 per XLF share, ex-date
+      2016-09-19 (SSGA). Unadjusted XLF close on 2016-09-16 = 23.62 (Twelve Data
+      adjust=none), so the correct ex-date factor is 1 - 4.44356/23.62 = 0.81187.
+      Twelve Data adjust=all (2026-11-18) implies a factor adjusted/unadjusted of 0.56947 on
+      2016-09-16 and 0.83280 on 2016-09-19, i.e. 0.56947/0.83280 = 0.68380 applied across the
+      ex-date instead of 0.81187. Multiplier for pre-ex-date prices =
+      0.83280 * 0.81187 / 0.56947 = 1.18729. It is a ratio of factors, so later uniform
+      re-adjustments of the whole history by adjust=all leave it valid.
+      Check on real data: raw return 2016-09-19 = +19.56%; corrected = +0.70%
+      (unadjusted price return + distribution = +0.57%).
+    sources:
+      - "https://www.businesswire.com/news/home/20160608006488/en/State-Street-Global-Advisors-Announces-that-Changes-to-the-Financial-Select-Sector-Index-will-Result-in-Modifications-to-The-Financial-Select-Sector-SPDR%C2%AE-Fund"
+      - "https://app.researchpool.com/provider/businesswire/state-street-corp-stt-state-street-global-advisors-announces-dividend-distributions-resultin"
+      - "https://miaxglobal.com/sites/default/files/alert-files/XLF_Distribution_39575.pdf"
