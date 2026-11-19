@@ -15,7 +15,12 @@ TABLES: tuple[str, ...] = (
     "dq_results",
     "price_adjustments",
 )
-VIEWS: tuple[str, ...] = ("price_adjustment_status", "prices_clean")
+VIEWS: tuple[str, ...] = ("price_adjustment_status", "prices_clean", "macro_asof")
+
+# Daily FRED series exposed in macro_asof. Series with publication lags (CPIAUCSL, UNRATE,
+# FEDFUNDS, NFCI, STLFSI4) are pending their own ADR.
+MACRO_ASOF_SERIES: tuple[str, ...] = ("DGS10", "DGS2", "DGS3MO", "T10Y2Y")
+_MACRO_ASOF_VALUES = ", ".join(f"('{s}')" for s in MACRO_ASOF_SERIES)
 
 DDL: tuple[str, ...] = (
     """
@@ -142,6 +147,39 @@ DDL: tuple[str, ...] = (
         f.adjustment_ids
     FROM raw_prices p
     LEFT JOIN factors f USING (ticker, trade_date)
+    """,
+    # Point-in-time daily macro on the trading calendar of prices_clean, long format.
+    # Strict rule obs_date < trade_date: daily yields are published the next business day,
+    # so day d uses the latest non-missing observation dated before d (forward-fill only
+    # forward; NULL when the series has no earlier value). is_filled marks values carried
+    # over a FRED '.' or a missing row on the previous trading day.
+    f"""
+    CREATE OR REPLACE VIEW macro_asof AS
+    WITH calendar AS (
+        SELECT trade_date, lag(trade_date) OVER (ORDER BY trade_date) AS prev_trade_date
+        FROM (SELECT DISTINCT trade_date FROM prices_clean)
+    ),
+    series AS (
+        SELECT series_id FROM (VALUES {_MACRO_ASOF_VALUES}) v(series_id)
+    ),
+    grid AS (
+        SELECT c.trade_date, c.prev_trade_date, s.series_id
+        FROM calendar c CROSS JOIN series s
+    ),
+    obs AS (
+        SELECT series_id, obs_date, value
+        FROM raw_macro
+        WHERE value IS NOT NULL AND series_id IN (SELECT series_id FROM series)
+    )
+    SELECT
+        g.trade_date,
+        g.series_id,
+        o.value,
+        o.obs_date AS value_date,
+        coalesce(o.obs_date < g.prev_trade_date, false) AS is_filled
+    FROM grid g
+    ASOF LEFT JOIN obs o
+        ON o.series_id = g.series_id AND g.trade_date > o.obs_date
     """,
 )
 

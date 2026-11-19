@@ -2,7 +2,9 @@
 
 Layers: ``raw_*`` tables (provider data, untouched) -> ``*_clean`` views (documented,
 reversible corrections, one row per raw row, nothing imputed) -> ``*_asof`` views
-(point-in-time, publication lags; not built yet).
+(point-in-time on the trading calendar; today ``macro_asof`` for the daily FRED series).
+``create_schema`` also creates ``macro_asof``, so calling ``prepare_clean_prices`` first is
+enough before reading it.
 """
 
 from collections.abc import Sequence
