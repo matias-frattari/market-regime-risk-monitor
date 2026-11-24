@@ -31,6 +31,7 @@ from mrm.metrics.io import (
     RISK_FREE_SERIES,
     load_close_panel,
     load_risk_free,
+    stale_portfolios,
     table_summary,
     write_metrics,
 )
@@ -121,6 +122,7 @@ def main(
             summary = table_summary(con)
         else:
             summary = _frame_summary(result)
+        stale = stale_portfolios(con, portfolio.portfolio_id, dry_run=args.dry_run)
     finally:
         if own_con:
             con.close()
@@ -138,6 +140,11 @@ def main(
     print(f"{'table':<20}{'rows':>10}{'entities':>10}  date range")
     for name, rows, entities, lo, hi in summary:
         print(f"{name:<20}{rows:>10}{entities:>10}  {_fmt_range(lo, hi)}")
+    if stale:
+        print(
+            f"warning: portfolio rows older than the asset rows: {', '.join(stale)} "
+            "(re-run `mrm metrics --portfolio PATH` for each)"
+        )
     print("dry run: nothing written" if args.dry_run else "written (full rebuild, one transaction)")
     return 0
 

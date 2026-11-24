@@ -103,6 +103,32 @@ def write_metrics(
             con.unregister(name)
 
 
+def stale_portfolios(
+    con: duckdb.DuckDBPyConnection, portfolio_id: str, *, dry_run: bool = False
+) -> list[str]:
+    """Other portfolios whose rows are older than the asset rows (``computed_at``).
+
+    ``write_metrics`` keeps other portfolios' rows, but they were computed on older prices.
+    After a write: portfolio ids with ``max(computed_at)`` before the asset rows'. In a dry
+    run nothing is rebuilt, so every other portfolio id present is returned (it would be
+    stale after a real run).
+    """
+    stale_filter = (
+        ""
+        if dry_run
+        else (
+            "HAVING max(computed_at) < (SELECT max(computed_at) FROM fact_risk_metrics "
+            "WHERE entity_type = 'asset')"
+        )
+    )
+    rows = con.execute(
+        "SELECT entity_id FROM fact_risk_metrics WHERE entity_type = 'portfolio' "
+        f"AND entity_id <> ? GROUP BY entity_id {stale_filter} ORDER BY entity_id",
+        [portfolio_id],
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 def table_summary(con: duckdb.DuckDBPyConnection) -> list[tuple[str, int, int, object, object]]:
     """(table, rows, distinct entities, min date, max date) for each fact table. No values."""
     queries = {

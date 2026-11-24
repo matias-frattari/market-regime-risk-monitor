@@ -175,7 +175,11 @@ is never modified.
 Built by `uv run mrm metrics` (`mrm.metrics.run`) from `prices_clean` and DGS3MO in
 `macro_asof`; formulas in `docs/methodology.md`. Each run is a full rebuild in one transaction:
 asset rows, the run's portfolio rows and all correlations are deleted and re-inserted; rows of
-other portfolios are kept. `computed_at` (naive UTC) is the run time. NaN results are never
+other portfolios are kept. Those kept rows were computed on older prices (a price reload with
+`adjust=all` re-adjusts the whole history), so they can disagree with the rebuilt asset rows: the
+run prints `warning: portfolio rows older than the asset rows: <ids>` (in a dry run, every other
+portfolio id present). Re-run `mrm metrics --portfolio PATH` for each listed id.
+`computed_at` (naive UTC) is the run time. NaN results are never
 stored: a missing row means "not computable" (incomplete window, no data, zero dispersion).
 
 **Not exported.** These tables stay in the gitignored warehouse. `fact_returns` holds daily

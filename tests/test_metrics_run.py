@@ -138,6 +138,19 @@ def test_rerun_is_idempotent_and_keeps_other_portfolios(
     assert _count(loaded, "SELECT count(*) FROM fact_returns") == 5 * (N_DAYS - 1)
 
 
+def test_stale_portfolios_are_listed_in_the_summary(
+    loaded: duckdb.DuckDBPyConnection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    main([], con=loaded, portfolio=P1, adjustments=[])
+    assert "warning" not in capsys.readouterr().out  # no other portfolio yet
+    main([], con=loaded, portfolio=P2, adjustments=[])
+    assert "older than the asset rows: p1 " in capsys.readouterr().out
+    main(["--dry-run"], con=loaded, portfolio=P2, adjustments=[])
+    assert "older than the asset rows: p1 " in capsys.readouterr().out
+    main([], con=loaded, portfolio=P1, adjustments=[])
+    assert "older than the asset rows: p2 " in capsys.readouterr().out
+
+
 def test_dry_run_writes_nothing_and_prints_no_prices(
     loaded: duckdb.DuckDBPyConnection, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -146,6 +146,7 @@ live Tableau Public link; methodology and limitations documented.
   reads prices_clean (rows off the NYSE calendar are discarded and counted) + DGS3MO from
   macro_asof, full rebuild of the fact_* metric tables in one
   transaction; portfolio from `config/portfolio.yaml` if present, else `portfolio.example.yaml`;
-  prints counts and date ranges only; exit 1 no data / holding without prices, 2 config error)
+  prints counts and date ranges only, plus a warning listing other portfolios whose rows are older
+  than the asset rows; exit 1 no data / holding without prices, 2 config error)
 - test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - export: TBD
