@@ -72,8 +72,8 @@ ingest ──► raw_*  (tables)      provider data as loaded; only the ingestio
            *_clean (views)       documented, reversible corrections from config/; no imputation
              │                   prices_clean = raw_prices + config/price_adjustments.yaml
              ▼
-           *_asof  (views)       point-in-time: publication lags + forward-fill (pending)
-             │                   macro_asof = raw_macro + lags, on the prices_clean trading days
+           *_asof  (views)       point-in-time: no look-ahead + forward-fill
+             │                   macro_asof = raw_macro (daily series), on the prices_clean trading days
              ▼
    metrics / regimes / portfolio / exports / data quality checks
 ```
@@ -81,8 +81,11 @@ ingest ──► raw_*  (tables)      provider data as loaded; only the ingestio
 **Rule: everything after the ingestion reads `*_clean` / `*_asof`, never `raw_*`.**
 `raw_*` stays the provider's data so that every correction is visible, testable and can be
 reverted by editing config. The data quality checks on prices also read `prices_clean`.
-`macro_asof` is not built yet; macro values need no correction today, so it will read
-`raw_macro` directly.
+`macro_asof` reads `raw_macro` directly, a documented exception: macro values need no
+correction today, so there is no `macro_clean`. It covers the daily Treasury series (DGS10,
+DGS2, DGS3MO, T10Y2Y) with the strict rule `obs_date < trade_date`; the series with
+publication lags (CPIAUCSL, UNRATE, FEDFUNDS, NFCI, STLFSI4) are pending for Phase 3 with
+their own ADR. Columns and rules: `docs/data_dictionary.md`.
 
 The clean layer is prepared by `mrm.storage.clean.prepare_clean_prices(con)`. It creates the
 schema (tables and views) and syncs `config/price_adjustments.yaml` into `price_adjustments`.

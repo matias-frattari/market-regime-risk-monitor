@@ -16,11 +16,14 @@ Conventions:
 |---|---|---|
 | `raw_*` | tables `raw_prices`, `raw_macro` | Provider data exactly as loaded. Only the ingestion writes here |
 | `*_clean` | view `prices_clean` | Documented, reversible corrections (from `config/`). One row per raw row, nothing imputed |
-| `*_asof` | `macro_asof` (**pending**) | Point-in-time: publication lags plus forward-fill, aligned to the trading days of `prices_clean` |
+| `*_asof` | view `macro_asof` | Point-in-time: no look-ahead, forward-fill, aligned to the trading days of `prices_clean` |
 
 Everything downstream (metrics, regimes, portfolio, exports, data quality checks on prices)
-reads `*_clean` / `*_asof`, **never** `raw_*`. There is no `macro_clean` yet: macro values
-need no correction today, so `macro_asof` will read `raw_macro` directly.
+reads `*_clean` / `*_asof`, **never** `raw_*`.
+
+**Documented exception:** `macro_asof` reads `raw_macro` directly. There is no `macro_clean`
+because macro values need no correction today. If a macro correction is ever needed, a
+`macro_clean` view goes between them and `macro_asof` reads from it instead.
 
 ## Warehouse tables
 
@@ -199,6 +202,36 @@ Same rows and key as `raw_prices` (`(ticker, trade_date)`).
 Today one adjustment applies: XLF ×1.18729 on 2444 rows (2007-01-04..2016-09-16). The XLF
 return on 2016-09-19 is +19.56% in `raw_prices` and +0.70% in `prices_clean`.
 
+### `macro_asof`
+Point-in-time daily macro values on the trading calendar. **Read macro from here, never from
+`raw_macro`.** Long format, one row per `(trade_date, series_id)`. Reads `raw_macro` directly
+(documented exception, see "Data layers"). Created by `create_schema`, so calling
+`mrm.storage.clean.prepare_clean_prices(con)` first is enough before reading it.
+
+| Column | Type | Description |
+|---|---|---|
+| trade_date | DATE | Trading day: every distinct `trade_date` in `prices_clean` (NYSE calendar as stored) |
+| series_id | VARCHAR | One of `MACRO_ASOF_SERIES` in `mrm.storage.schema`: DGS10, DGS2, DGS3MO, T10Y2Y |
+| value | DOUBLE | Latest non-missing `raw_macro.value` with `obs_date < trade_date`; NULL if none exists |
+| value_date | DATE | `obs_date` of the value used; NULL when `value` is NULL |
+| is_filled | BOOLEAN | `true` when the value was carried forward over a gap, i.e. `value_date` is before the previous trading day (a FRED `.` / NULL value or a missing row on that day); `false` otherwise, including when `value` is NULL |
+
+Rules:
+- **No look-ahead:** strict `obs_date < trade_date`. Daily Treasury yields are published the
+  next business day, so trading day *d* sees at most the observation of the previous day.
+  Implemented as an `ASOF LEFT JOIN` on `trade_date > obs_date`.
+- **Forward-fill only forward:** missing values (FRED `.`, stored as NULL, or absent rows) are
+  skipped and the latest earlier value is carried. Values are never filled backwards.
+- **Series start:** on trading days before the first observation of a series, `value` and
+  `value_date` are NULL (no backfill).
+- Observations on days the NYSE is closed (e.g. Treasury trading on a stock-market holiday)
+  are used on the next trading day; they never create rows.
+
+**Pending (Phase 3, own ADR on publication lags):** CPIAUCSL, UNRATE, FEDFUNDS, NFCI and
+STLFSI4 are **not** in `macro_asof`. Their `obs_date` is a reference date, not the release date
+(see "Macro look-ahead risk"), so they need a per-series publication lag before they can be
+exposed.
+
 ## Data quality checks (`uv run mrm check`)
 
 `mrm check` first prepares the clean layer (schema plus sync of
@@ -272,9 +305,10 @@ Joining these series to prices on `obs_date` uses information **before** it was 
 look-ahead (`docs/methodology.md`). The publication lag applied per series is decided in the
 regime-model phase, not here.
 
-**Pending:** a forward-filled, publication-lagged macro view (no look-ahead) does **not**
-exist yet. It will be the `macro_asof` view of the `*_asof` layer (see "Data layers"), built on
-the trading days of `prices_clean` once the lags above are decided.
+**Status:** the daily series (DGS10, DGS2, DGS3MO, T10Y2Y) are available without look-ahead in
+the `macro_asof` view (rule `obs_date < trade_date`, Phase 1.6). **Pending for Phase 3, with
+its own ADR:** publication lags for CPIAUCSL, UNRATE, FEDFUNDS, NFCI and STLFSI4. Until then
+they are not in `macro_asof` and must not be joined to prices on `obs_date`.
 
 ## CSV exports (`data/exports/`)
 

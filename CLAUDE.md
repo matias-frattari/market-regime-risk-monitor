@@ -72,7 +72,7 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 ## Data model (DuckDB)
 Tables: raw_prices, raw_macro, dim_asset, ingest_log, dq_results, price_adjustments, fact_returns,
 fact_risk_metrics, fact_regime, fact_backtest_equity, fact_backtest_summary.
-Views: price_adjustment_status, prices_clean; macro_asof (pending).
+Views: price_adjustment_status, prices_clean, macro_asof.
 Every table and view documented in docs/data_dictionary.md.
 
 Layers: `raw_*` (provider data, written only by ingestion) -> `*_clean` (documented, reversible
@@ -80,7 +80,15 @@ corrections from config, no imputation) -> `*_asof` (point-in-time, publication 
 **Everything after ingestion reads `*_clean` / `*_asof`, never `raw_*`**: read prices from
 `prices_clean` (call `mrm.storage.clean.prepare_clean_prices(con)` first). Corrections go in
 `config/price_adjustments.yaml` with derivation, sources and an ADR (see ADR 0003); never edit
-`raw_prices`.
+`raw_prices`. Read macro from `macro_asof`: long format (trade_date, series_id, value,
+value_date, is_filled) on the `prices_clean` trading days, strict `obs_date < trade_date`,
+forward-fill only forward, NULL before a series starts. It reads `raw_macro` directly
+(documented exception: no `macro_clean`). It holds only DGS10, DGS2, DGS3MO, T10Y2Y.
+
+## Status
+- Phase 1.6 done: `macro_asof` for the daily Treasury series.
+- Pending for Phase 3 (own ADR on publication lags): CPIAUCSL, UNRATE, FEDFUNDS, NFCI,
+  STLFSI4 in `macro_asof`. Never join them to prices on `obs_date`.
 
 ## Metric definitions (document formulas in docs/methodology.md)
 Daily log/simple returns; annualized vol (252d); rolling 60d vol; max drawdown;
