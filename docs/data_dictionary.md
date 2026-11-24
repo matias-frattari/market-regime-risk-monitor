@@ -245,7 +245,7 @@ once) and `correlation` in [−1, 1].
 | correlation | DOUBLE | no | Correlation over the 126 returns ending at `trade_date` |
 | computed_at | TIMESTAMP | no | Run time (UTC) |
 
-No row when the window has a missing return for either ticker or zero dispersion.
+No row when the window has a missing return for either ticker or zero dispersion (sample std ≤ 1e−12, `ZERO_DISPERSION`).
 
 ## Warehouse views
 

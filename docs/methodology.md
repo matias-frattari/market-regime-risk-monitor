@@ -72,8 +72,8 @@ Constants: 252 trading days per year, confidence 95%, rolling windows 60d (volat
 | Historical CVaR 95% | `−mean(r \| r ≤ q)` |
 | Parametric VaR 95% | Gaussian with sample `μ`, `σ` (ddof=1): `VaR = −(μ − z σ)`, `z = Φ⁻¹(0.95) ≈ 1.6449` |
 | Parametric CVaR 95% | `−(μ − σ φ(z) / 0.05)` (`φ(z)/0.05 ≈ 2.0627`) |
-| Rolling correlation 126d | Pearson correlation of each pair over the 126 returns ending at *t* |
-| Euler risk contribution | `Σ` = sample covariance (ddof=1) of the holdings' last 126 returns; `σ_p = √(wᵀΣw)`; `RC_i = w_i (Σw)_i / σ_p`; reported `× √252`, and `RC_i / σ_p` as a share |
+| Rolling correlation 126d | Pearson correlation of each pair over the 126 returns ending at *t*; no value when either sample std ≤ 1e−12 |
+| Euler risk contribution | `Σ` = sample covariance (ddof=1) of the holdings' last 126 returns; `σ_p = √(wᵀΣw)`; `RC_i = w_i (Σw)_i / σ_p`; reported `× √252`, and `RC_i / σ_p` as a share; no value when daily `σ_p` ≤ 1e−12 |
 
 VaR/CVaR are **one-day** losses reported as positive numbers, computed on the full history
 (rolling VaR is planned for Phase 3, per regime). By Euler's theorem for the homogeneous

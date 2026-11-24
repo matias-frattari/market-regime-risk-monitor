@@ -104,3 +104,19 @@ def test_single_holding_contributes_all_the_risk() -> None:
     vol = rolling_volatility(panel["C"], window=126).dropna()
     assert result["risk_contrib"].to_numpy() == pytest.approx(vol.to_numpy())
     assert result["risk_contrib_pct"].to_numpy() == pytest.approx(1.0)
+
+
+def test_constant_series_has_no_correlation_rows() -> None:
+    panel = _panel()
+    panel["K"] = 0.0123  # constant return: centred values are float noise, not dispersion
+    result = rolling_correlations(panel, window=126)
+    assert not ((result.ticker_a == "K") | (result.ticker_b == "K")).any()
+    assert len(_corr(result, "A", "C")) == len(panel) - 125  # other pairs unaffected
+
+
+def test_riskless_combination_has_no_euler_rows() -> None:
+    panel = _panel()  # B = -2 A, so 2/3 A + 1/3 B is riskless up to float noise
+    result = rolling_euler_contributions(panel, {"A": 2 / 3, "B": 1 / 3}, window=126)
+    assert result.empty
+    rc, sigma = euler_contributions(np.array([[1e-30]]), np.array([1.0]))
+    assert sigma == 0.0 and np.isnan(rc).all()

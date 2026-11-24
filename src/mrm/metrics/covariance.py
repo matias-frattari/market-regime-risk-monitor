@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from mrm.metrics.returns import TRADING_DAYS
+from mrm.metrics.risk import ZERO_DISPERSION
 
 CORRELATION_COLUMNS = ["trade_date", "ticker_a", "ticker_b", "correlation"]
 CONTRIBUTION_COLUMNS = ["trade_date", "ticker", "risk_contrib", "risk_contrib_pct"]
@@ -24,7 +25,7 @@ def rolling_correlations(returns: pd.DataFrame, window: int = 126) -> pd.DataFra
     """Pearson correlation of each pair ``ticker_a < ticker_b`` over the trailing window.
 
     Long format (``CORRELATION_COLUMNS``). Rows are emitted only for complete windows where
-    both series have no NaN and non-zero dispersion.
+    both series have no NaN and a sample std above ``ZERO_DISPERSION`` (constant series).
     """
     tickers = sorted(returns.columns)
     if len(returns) < window or len(tickers) < 2:
@@ -35,11 +36,12 @@ def rolling_correlations(returns: pd.DataFrame, window: int = 126) -> pd.DataFra
     valid = ~np.isnan(win).any(axis=1)  # (m, k)
     centred = win - win.mean(axis=1, keepdims=True)
     sd = np.sqrt((centred**2).sum(axis=1))  # (m, k), unnormalised
+    dispersed = sd / np.sqrt(window - 1) > ZERO_DISPERSION  # sample std, (m, k)
     frames: list[pd.DataFrame] = []
     for i, a in enumerate(tickers):
         for j in range(i + 1, len(tickers)):
             denom = sd[:, i] * sd[:, j]
-            ok = valid[:, i] & valid[:, j] & (denom > 0)
+            ok = valid[:, i] & valid[:, j] & dispersed[:, i] & dispersed[:, j]
             corr = (centred[:, :, i] * centred[:, :, j]).sum(axis=1)[ok] / denom[ok]
             frames.append(
                 pd.DataFrame(
@@ -58,12 +60,13 @@ def euler_contributions(cov: np.ndarray, weights: np.ndarray) -> tuple[np.ndarra
     """Euler decomposition of portfolio volatility.
 
     ``sigma_p = sqrt(w' S w)``, ``RC_i = w_i (S w)_i / sigma_p``; ``sum(RC) = sigma_p``.
-    Returns ``(RC, sigma_p)``; RC is all NaN when ``sigma_p`` is 0.
+    Returns ``(RC, sigma_p)``; RC is all NaN and ``sigma_p`` 0 when ``sigma_p`` is at most
+    ``ZERO_DISPERSION`` (floating-point noise of a riskless combination).
     """
     w = np.asarray(weights, dtype=float)
     marginal = np.asarray(cov, dtype=float) @ w
     sigma = math.sqrt(max(float(w @ marginal), 0.0))
-    if sigma == 0.0:
+    if not sigma > ZERO_DISPERSION:
         return np.full_like(w, np.nan), 0.0
     return w * marginal / sigma, sigma
 
