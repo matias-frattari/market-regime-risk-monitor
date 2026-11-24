@@ -1,0 +1,91 @@
+# Publication lags of the FRED series in macro_asof. See docs/decisions/0005-macro-publication-lags.md.
+#
+# Availability rule: the value dated obs_date counts as published on
+#   available_date = obs_date + lag_days      (or the override's available_date, if listed)
+# and macro_asof uses it only on trading days strictly AFTER available_date
+# (available_date < trade_date). The release day itself is excluded: conservative by <= 1 day.
+#
+# lag_days covers every first release on ALFRED (output_type=4, observations 2005-01..2026-10,
+# queried 2026-11-24) except releases delayed by extraordinary events, which are listed one by
+# one under `overrides` with their ALFRED first-release date. An override must be later than
+# obs_date + lag_days (overrides only delay, never advance a value).
+# Every series of config/macro.yaml needs exactly one entry here (no silent default).
+
+series:
+  # Daily Treasury series: obs_date = the trading day of the yield, published the next
+  # business day. lag 0 keeps the Phase 1.6 rule obs_date < trade_date unchanged.
+  DGS10:
+    frequency: daily
+    lag_days: 0
+    source: "Phase 1.6 rule (obs_date < trade_date); docs/data_dictionary.md, macro_asof"
+  DGS2:
+    frequency: daily
+    lag_days: 0
+    source: "Phase 1.6 rule (obs_date < trade_date); docs/data_dictionary.md, macro_asof"
+  DGS3MO:
+    frequency: daily
+    lag_days: 0
+    source: "Phase 1.6 rule (obs_date < trade_date); docs/data_dictionary.md, macro_asof"
+  T10Y2Y:
+    frequency: daily
+    lag_days: 0
+    source: "Phase 1.6 rule (obs_date < trade_date); docs/data_dictionary.md, macro_asof"
+
+  # Monthly: obs_date = 1st day of the reference month.
+  CPIAUCSL:
+    frequency: monthly
+    lag_days: 56   # ALFRED first-release lag 37-59 d; 56 = 2015-01 CPI released 2015-02-26 (scheduled)
+    source: "ALFRED first releases 2005-2026 (output_type=4), queried 2026-11-24"
+    overrides:
+      - obs_date: 2013-09-01
+        available_date: 2013-10-30
+        reason: "September 2013 CPI moved from 2013-10-16 to 2013-10-30 by the October 2013 federal shutdown"
+        source: "ALFRED first release 2013-10-30; BLS revised release schedule https://www.bls.gov/bls/updated_release_schedule.htm"
+  UNRATE:
+    frequency: monthly
+    lag_days: 41   # ALFRED first-release lag 31-80 d; 41 = largest outside the overrides (2026-01)
+    source: "ALFRED first releases 2005-2026 (output_type=4), queried 2026-11-24"
+    overrides:
+      - obs_date: 2013-09-01
+        available_date: 2013-10-22
+        reason: "September 2013 Employment Situation delayed by the October 2013 federal shutdown"
+        source: "ALFRED first release 2013-10-22; BLS revised release schedule https://www.bls.gov/bls/updated_release_schedule.htm"
+      - obs_date: 2025-09-01
+        available_date: 2025-11-20
+        reason: "September 2025 Employment Situation delayed by the 2025-10-01..2025-11-12 federal shutdown"
+        source: "ALFRED first release 2025-11-20; BLS release https://www.bls.gov/news.release/archives/empsit_11202025.pdf"
+      - obs_date: 2025-11-01
+        available_date: 2025-12-16
+        reason: "November 2025 Employment Situation rescheduled to 2025-12-16 after the 2025 federal shutdown"
+        source: "ALFRED first release 2025-12-16; BLS release https://www.bls.gov/news.release/archives/empsit_11202025.pdf"
+  FEDFUNDS:
+    frequency: monthly
+    lag_days: 44   # ALFRED first-release lag 28-44 d, no identified events: the max is used
+    source: "ALFRED first releases 2005-2026 (output_type=4), queried 2026-11-24"
+
+  # Weekly: obs_date = the Friday that ends the reference week ("Weekly, Ending Friday").
+  NFCI:
+    frequency: weekly
+    lag_days: 6    # Chicago Fed: Wednesday 8:30 ET (+5), Thursday after a holiday (+6); ALFRED 803/807 at 5-6 d
+    source: "ALFRED first releases 2011-2026 (output_type=4), queried 2026-11-24; https://www.chicagofed.org/research/data/nfci/current-data"
+    overrides:
+      - obs_date: 2012-10-26
+        available_date: 2012-11-07
+        reason: "Release skipped (cause not verified; week of Hurricane Sandy)"
+        source: "ALFRED first release 2012-11-07"
+      - obs_date: 2019-12-27
+        available_date: 2020-01-08
+        reason: "Release skipped (cause not verified; New Year's Day week)"
+        source: "ALFRED first release 2020-01-08"
+      - obs_date: 2022-12-16
+        available_date: 2023-01-05
+        reason: "Releases skipped (cause not verified; Christmas and New Year weeks)"
+        source: "ALFRED first release 2023-01-05"
+      - obs_date: 2022-12-23
+        available_date: 2023-01-05
+        reason: "Releases skipped (cause not verified; Christmas and New Year weeks)"
+        source: "ALFRED first release 2023-01-05"
+  STLFSI4:
+    frequency: weekly
+    lag_days: 6    # ALFRED 5-6 d on all 209 releases since 2022-11-17 (no fixed weekday documented)
+    source: "ALFRED first releases 2022-2026 (output_type=4), queried 2026-11-24"

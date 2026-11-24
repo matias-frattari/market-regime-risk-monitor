@@ -4,19 +4,27 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from mrm.storage.models import Asset, MacroSeries, Portfolio, PriceAdjustment
+from mrm.storage.models import (
+    Asset,
+    MacroLag,
+    MacroSeries,
+    Portfolio,
+    PriceAdjustment,
+    ReleaseOverride,
+)
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH: Path = REPO_ROOT / "config" / "universe.yaml"
 MACRO_PATH: Path = REPO_ROOT / "config" / "macro.yaml"
 DATA_QUALITY_PATH: Path = REPO_ROOT / "config" / "data_quality.yaml"
 PRICE_ADJUSTMENTS_PATH: Path = REPO_ROOT / "config" / "price_adjustments.yaml"
+MACRO_LAGS_PATH: Path = REPO_ROOT / "config" / "macro_lags.yaml"
 PORTFOLIO_PATH: Path = REPO_ROOT / "config" / "portfolio.yaml"  # personal, gitignored
 PORTFOLIO_EXAMPLE_PATH: Path = REPO_ROOT / "config" / "portfolio.example.yaml"
 WEIGHT_SUM_TOLERANCE = 1e-9
@@ -262,6 +270,92 @@ def load_price_adjustments(path: Path | None = None) -> list[PriceAdjustment]:
                 sources=tuple(str(s).strip() for s in sources),
             )
         )
+    return result
+
+
+def _text(entry: dict[str, Any], key: str, where: str) -> str:
+    text = str(entry.get(key) or "").strip()
+    if not text:
+        raise ValueError(f"{where} needs a '{key}'")
+    return text
+
+
+def _overrides(entry: dict[str, Any], series_id: str, lag_days: int) -> tuple[ReleaseOverride, ...]:
+    result: list[ReleaseOverride] = []
+    seen: set[date] = set()
+    for item in _entries(entry, "overrides"):
+        where = f"override of {series_id}"
+        obs_date = _date(item.get("obs_date"), f"{where}.obs_date")
+        available_date = _date(item.get("available_date"), f"{where}.available_date")
+        if obs_date in seen:
+            raise ValueError(f"duplicated override of {series_id} for {obs_date.isoformat()}")
+        seen.add(obs_date)
+        if available_date <= obs_date + timedelta(days=lag_days):
+            raise ValueError(
+                f"override of {series_id} for {obs_date.isoformat()} must be later than "
+                f"obs_date + lag_days ({lag_days}); overrides only delay a value"
+            )
+        result.append(
+            ReleaseOverride(
+                series_id=series_id,
+                obs_date=obs_date,
+                available_date=available_date,
+                reason=_text(item, "reason", where),
+                source=_text(item, "source", where),
+            )
+        )
+    return tuple(sorted(result, key=lambda o: o.obs_date))
+
+
+def load_macro_lags(
+    path: Path | None = None, series_ids: Sequence[str] | None = None
+) -> list[MacroLag]:
+    """Load ``config/macro_lags.yaml`` (``series: {ID: {frequency, lag_days, source,
+    overrides}}``), see docs/decisions/0005-macro-publication-lags.md.
+
+    ``series_ids`` (default: the series of ``config/macro.yaml``) must match the configured
+    series exactly, so no series reaches ``macro_asof`` without an explicit lag. Raises
+    ValueError on a malformed file, a blocked series, a missing/extra series, or an override
+    that is not later than ``obs_date + lag_days``.
+    """
+    raw = yaml.safe_load((path or MACRO_LAGS_PATH).read_text(encoding="utf-8"))
+    section = raw.get("series") if isinstance(raw, dict) else None
+    if not isinstance(section, dict) or not section:
+        raise ValueError("macro lags file must hold a non-empty 'series' mapping")
+
+    result: list[MacroLag] = []
+    for key, entry in section.items():
+        series_id = str(key).strip().upper()
+        if series_id in BLOCKED_SERIES:
+            raise ValueError(f"series {series_id} is copyrighted and must not be used")
+        if any(lag.series_id == series_id for lag in result):
+            raise ValueError(f"duplicated macro lag series: {series_id}")
+        if not isinstance(entry, dict):
+            raise ValueError(f"macro lag of {series_id} must be a mapping")
+        frequency = entry.get("frequency")
+        if frequency not in FREQUENCIES:
+            raise ValueError(f"frequency of {series_id} must be one of {FREQUENCIES}")
+        lag_days = _int(entry.get("lag_days"), f"lag_days of {series_id}", 0)
+        result.append(
+            MacroLag(
+                series_id=series_id,
+                frequency=frequency,
+                lag_days=lag_days,
+                source=_text(entry, "source", f"macro lag of {series_id}"),
+                overrides=_overrides(entry, series_id, lag_days),
+            )
+        )
+
+    expected = (
+        {s.series_id for s in load_macro_series()}
+        if series_ids is None
+        else {s.upper() for s in series_ids}
+    )
+    configured = {lag.series_id for lag in result}
+    if missing := sorted(expected - configured):
+        raise ValueError(f"macro series without a publication lag: {', '.join(missing)}")
+    if extra := sorted(configured - expected):
+        raise ValueError(f"publication lag for unknown macro series: {', '.join(extra)}")
     return result
 
 

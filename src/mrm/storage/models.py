@@ -80,3 +80,29 @@ class Portfolio:
     portfolio_id: str
     name: str
     weights: dict[str, float]
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseOverride:
+    """Documented delayed first release: ``obs_date`` became public on ``available_date``."""
+
+    series_id: str
+    obs_date: date
+    available_date: date
+    reason: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class MacroLag:
+    """Publication lag of one macro series (``config/macro_lags.yaml``).
+
+    The value dated ``obs_date`` is available on trading days after ``obs_date + lag_days``,
+    or after the override's ``available_date`` when one is listed.
+    """
+
+    series_id: str
+    frequency: str
+    lag_days: int
+    source: str
+    overrides: tuple[ReleaseOverride, ...] = ()

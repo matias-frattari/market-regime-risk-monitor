@@ -7,6 +7,7 @@ from mrm.config import (
     BLOCKED_SERIES,
     DEFAULT_OVERLAP_DAYS,
     load_data_quality_config,
+    load_macro_lags,
     load_macro_series,
     load_universe,
 )
@@ -155,3 +156,107 @@ def test_data_quality_config_rejects_malformed(
     path.write_text(DQ_MINIMAL.replace(old, new), encoding="utf-8")
     with pytest.raises(ValueError, match=match):
         load_data_quality_config(path)
+
+
+# --- macro publication lags (config/macro_lags.yaml) ----------------------------------------
+
+
+def test_macro_lags_repo_file_matches_adr_0005() -> None:
+    lags = {lag.series_id: lag for lag in load_macro_lags()}
+    assert {s: lag.lag_days for s, lag in lags.items()} == {
+        "DGS10": 0, "DGS2": 0, "DGS3MO": 0, "T10Y2Y": 0,
+        "CPIAUCSL": 56, "UNRATE": 41, "FEDFUNDS": 44, "NFCI": 6, "STLFSI4": 6,
+    }  # fmt: skip
+    assert {s: len(lag.overrides) for s, lag in lags.items() if lag.overrides} == {
+        "CPIAUCSL": 1, "UNRATE": 3, "NFCI": 4,
+    }  # fmt: skip
+    assert lags["UNRATE"].overrides[1].obs_date == date(2025, 9, 1)
+    assert lags["UNRATE"].overrides[1].available_date == date(2025, 11, 20)
+    for lag in lags.values():
+        assert all("ALFRED" in o.source for o in lag.overrides)
+
+
+LAGS_MINIMAL = """\
+series:
+  DGS10:
+    frequency: daily
+    lag_days: 0
+    source: s
+  UNRATE:
+    frequency: monthly
+    lag_days: 41
+    source: s
+    overrides:
+      - obs_date: 2025-09-01
+        available_date: 2025-11-20
+        reason: r
+        source: s
+"""
+
+
+def _write(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "macro_lags.yaml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_macro_lags_parses_minimal(tmp_path: Path) -> None:
+    lags = load_macro_lags(_write(tmp_path, LAGS_MINIMAL), series_ids=["DGS10", "unrate"])
+    assert [(lag.series_id, lag.frequency, lag.lag_days) for lag in lags] == [
+        ("DGS10", "daily", 0),
+        ("UNRATE", "monthly", 41),
+    ]
+    assert lags[0].overrides == ()
+    (override,) = lags[1].overrides
+    assert (override.series_id, override.obs_date, override.available_date) == (
+        "UNRATE", date(2025, 9, 1), date(2025, 11, 20),
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "match"),
+    [
+        ("lag_days: 41", "lag_days: -1", "lag_days of UNRATE"),
+        ("lag_days: 41", "lag_days: 4.5", "lag_days of UNRATE"),
+        ("lag_days: 0", "lag_days: true", "lag_days of DGS10"),
+        ("frequency: monthly", "frequency: quarterly", "frequency of UNRATE"),
+        ("  UNRATE:\n", "  dgs10:\n", "duplicated"),
+        ("  UNRATE:\n", "  VIXCLS:\n", "copyrighted"),
+        ("available_date: 2025-11-20", "available_date: 2025-10-12", "only delay"),
+        ("available_date: 2025-11-20", "available_date: 2025-10-11", "only delay"),
+        ("available_date: 2025-11-20", "available_date: nope", "available_date"),
+        ("        reason: r\n", "", "'reason'"),
+        ("    source: s\n    overrides", "    overrides", "'source'"),
+    ],
+)
+def test_macro_lags_rejects_malformed(tmp_path: Path, old: str, new: str, match: str) -> None:
+    assert old in LAGS_MINIMAL
+    path = _write(tmp_path, LAGS_MINIMAL.replace(old, new, 1))
+    with pytest.raises(ValueError, match=match):
+        load_macro_lags(path, series_ids=["DGS10", "UNRATE", "VIXCLS"])
+
+
+def test_macro_lags_rejects_duplicated_override(tmp_path: Path) -> None:
+    body = LAGS_MINIMAL + (
+        "      - obs_date: 2025-09-01\n        available_date: 2025-12-01\n"
+        "        reason: r\n        source: s\n"
+    )
+    with pytest.raises(ValueError, match="duplicated override"):
+        load_macro_lags(_write(tmp_path, body), series_ids=["DGS10", "UNRATE"])
+
+
+@pytest.mark.parametrize(
+    ("series_ids", "match"),
+    [(["DGS10", "UNRATE", "NFCI"], "without a publication lag: NFCI"), (["DGS10"], "unknown")],
+)
+def test_macro_lags_must_match_macro_series(
+    tmp_path: Path, series_ids: list[str], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        load_macro_lags(_write(tmp_path, LAGS_MINIMAL), series_ids=series_ids)
+
+
+@pytest.mark.parametrize("body", ["series: {}\n", "- DGS10\n", "series:\n  DGS10: 0\n"])
+def test_macro_lags_rejects_bad_structure(tmp_path: Path, body: str) -> None:
+    with pytest.raises(ValueError):
+        load_macro_lags(_write(tmp_path, body), series_ids=["DGS10"])
