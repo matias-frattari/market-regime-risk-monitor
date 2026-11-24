@@ -19,7 +19,12 @@ from zoneinfo import ZoneInfo
 
 import duckdb
 
-from mrm.config import DataQualityConfig, load_data_quality_config, load_price_adjustments
+from mrm.config import (
+    DataQualityConfig,
+    load_data_quality_config,
+    load_macro_lags,
+    load_price_adjustments,
+)
 from mrm.quality.checks import ALL_CHECKS, run_checks
 from mrm.quality.report import exit_code, format_report, summary_finding
 from mrm.storage.clean import prepare_clean_prices
@@ -66,13 +71,18 @@ def main(
     except (OSError, ValueError) as exc:
         print(f"error: invalid config/price_adjustments.yaml: {exc}")
         return 2
+    try:
+        macro_lags = load_macro_lags()
+    except (OSError, ValueError) as exc:
+        print(f"error: invalid config/macro_lags.yaml: {exc}")
+        return 2
     today = today or new_york_today()
     run_id = uuid.uuid4().hex[:12]
 
     own_con = con is None
     con = con or connect()
     try:
-        prepare_clean_prices(con, adjustments=adjustments)
+        prepare_clean_prices(con, adjustments=adjustments, macro_lags=macro_lags)
         findings = run_checks(con, cfg, today)
         findings.append(summary_finding(findings, len(ALL_CHECKS)))
         if not args.no_save:

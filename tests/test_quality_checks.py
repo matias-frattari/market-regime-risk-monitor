@@ -405,3 +405,14 @@ def test_main_syncs_adjustments_before_checks(
     out = capsys.readouterr().out
     assert "price_adjustments" in out and "applied ×1.2" in out
     assert "price_extreme_returns" not in out
+
+
+def test_invalid_macro_lags_config_exits_2(
+    con: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    def broken() -> None:
+        raise ValueError("macro series without a publication lag: NFCI")
+
+    monkeypatch.setattr(run, "load_macro_lags", broken)
+    assert run.main(["--no-save"], con=con, adjustments=[]) == 2
+    assert "config/macro_lags.yaml" in capsys.readouterr().out

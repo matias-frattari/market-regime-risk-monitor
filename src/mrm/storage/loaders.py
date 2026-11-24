@@ -12,7 +12,14 @@ from typing import Any
 
 import duckdb
 
-from mrm.storage.models import Asset, Finding, MacroObservation, PriceAdjustment, PriceBar
+from mrm.storage.models import (
+    Asset,
+    Finding,
+    MacroLag,
+    MacroObservation,
+    PriceAdjustment,
+    PriceBar,
+)
 
 PRICE_SOURCE = "twelvedata"
 MACRO_SOURCE = "fred"
@@ -271,3 +278,23 @@ def sync_price_adjustments(
     steps.append(("INSERT INTO price_adjustments VALUES (?, ?, ?, ?, ?, ?)", params, True))
     _run_in_transaction(con, steps)
     return len(params)
+
+
+def sync_macro_lags(con: duckdb.DuckDBPyConnection, lags: Sequence[MacroLag]) -> tuple[int, int]:
+    """Make ``macro_publication_lags`` and ``macro_release_overrides`` equal to the config
+    (delete + insert, one transaction). Returns (series, overrides) synced."""
+    now = utc_now()
+    lag_params = [[lag.series_id, lag.frequency, lag.lag_days, now] for lag in lags]
+    override_params = [
+        [o.series_id, o.obs_date, o.available_date, o.reason, now]
+        for lag in lags
+        for o in lag.overrides
+    ]
+    steps: list[_Step] = [
+        ("DELETE FROM macro_release_overrides", [], False),
+        ("DELETE FROM macro_publication_lags", [], False),
+        ("INSERT INTO macro_publication_lags VALUES (?, ?, ?, ?)", lag_params, True),
+        ("INSERT INTO macro_release_overrides VALUES (?, ?, ?, ?, ?)", override_params, True),
+    ]
+    _run_in_transaction(con, steps)
+    return len(lag_params), len(override_params)

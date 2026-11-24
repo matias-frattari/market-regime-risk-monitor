@@ -14,16 +14,16 @@ TABLES: tuple[str, ...] = (
     "ingest_log",
     "dq_results",
     "price_adjustments",
+    "macro_publication_lags",
+    "macro_release_overrides",
     "fact_returns",
     "fact_risk_metrics",
     "fact_correlations",
 )
 VIEWS: tuple[str, ...] = ("price_adjustment_status", "prices_clean", "macro_asof")
 
-# Daily FRED series exposed in macro_asof. Series with publication lags (CPIAUCSL, UNRATE,
-# FEDFUNDS, NFCI, STLFSI4) are pending their own ADR.
-MACRO_ASOF_SERIES: tuple[str, ...] = ("DGS10", "DGS2", "DGS3MO", "T10Y2Y")
-_MACRO_ASOF_VALUES = ", ".join(f"('{s}')" for s in MACRO_ASOF_SERIES)
+# The series of macro_asof are the rows of macro_publication_lags, synced from
+# config/macro_lags.yaml by mrm.storage.clean.prepare_clean_prices (ADR 0005).
 
 DDL: tuple[str, ...] = (
     """
@@ -91,6 +91,28 @@ DDL: tuple[str, ...] = (
         multiplier                DOUBLE    NOT NULL CHECK (multiplier > 0),
         apply_if_raw_return_above DOUBLE    NOT NULL,
         synced_at                 TIMESTAMP NOT NULL  -- UTC
+    )
+    """,
+    # Publication lags of the macro series (config/macro_lags.yaml, ADR 0005), synced in full
+    # by prepare_clean_prices. macro_asof exposes exactly the series listed here.
+    """
+    CREATE TABLE IF NOT EXISTS macro_publication_lags (
+        series_id VARCHAR   NOT NULL PRIMARY KEY,
+        frequency VARCHAR   NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+        lag_days  INTEGER   NOT NULL CHECK (lag_days >= 0),
+        synced_at TIMESTAMP NOT NULL  -- UTC
+    )
+    """,
+    # Documented delayed first releases (date from ALFRED): replace obs_date + lag_days.
+    """
+    CREATE TABLE IF NOT EXISTS macro_release_overrides (
+        series_id      VARCHAR   NOT NULL,
+        obs_date       DATE      NOT NULL,
+        available_date DATE      NOT NULL,
+        reason         VARCHAR   NOT NULL,
+        synced_at      TIMESTAMP NOT NULL,  -- UTC
+        PRIMARY KEY (series_id, obs_date),
+        CHECK (available_date > obs_date)
     )
     """,
     # Metric tables (Phase 2), local only: rebuilt by mrm.metrics.run, never exported as-is.
@@ -189,38 +211,65 @@ DDL: tuple[str, ...] = (
     FROM raw_prices p
     LEFT JOIN factors f USING (ticker, trade_date)
     """,
-    # Point-in-time daily macro on the trading calendar of prices_clean, long format.
-    # Strict rule obs_date < trade_date: daily yields are published the next business day,
-    # so day d uses the latest non-missing observation dated before d (forward-fill only
-    # forward; NULL when the series has no earlier value). is_filled marks values carried
-    # over a FRED '.' or a missing row on the previous trading day.
-    f"""
+    # Point-in-time macro on the trading calendar of prices_clean, long format (ADR 0005).
+    # A value becomes available on available_date = obs_date + lag_days (or its documented
+    # override) and is used only on trading days strictly after it: available_date < trade_date.
+    # Lag 0 (daily yields) is the Phase 1.6 rule obs_date < trade_date. available_date is made
+    # non-decreasing in obs_date (running max: it can only delay a value), and among values
+    # available on the same date the latest obs_date wins, so each trading day sees the most
+    # recent reference period already published. Forward-fill only forward; NULL before a
+    # series starts. is_filled: the value was already available on the previous trading day.
+    """
     CREATE OR REPLACE VIEW macro_asof AS
     WITH calendar AS (
         SELECT trade_date, lag(trade_date) OVER (ORDER BY trade_date) AS prev_trade_date
         FROM (SELECT DISTINCT trade_date FROM prices_clean)
     ),
-    series AS (
-        SELECT series_id FROM (VALUES {_MACRO_ASOF_VALUES}) v(series_id)
-    ),
     grid AS (
-        SELECT c.trade_date, c.prev_trade_date, s.series_id
-        FROM calendar c CROSS JOIN series s
+        SELECT c.trade_date, c.prev_trade_date, l.series_id
+        FROM calendar c CROSS JOIN macro_publication_lags l
+    ),
+    released AS (
+        SELECT
+            m.series_id,
+            m.obs_date,
+            m.value,
+            coalesce(o.available_date, m.obs_date + l.lag_days) AS release_date
+        FROM raw_macro m
+        JOIN macro_publication_lags l USING (series_id)
+        LEFT JOIN macro_release_overrides o USING (series_id, obs_date)
+        WHERE m.value IS NOT NULL
+    ),
+    monotone AS (
+        SELECT
+            series_id,
+            obs_date,
+            value,
+            max(release_date) OVER (
+                PARTITION BY series_id ORDER BY obs_date ROWS UNBOUNDED PRECEDING
+            ) AS available_date
+        FROM released
     ),
     obs AS (
-        SELECT series_id, obs_date, value
-        FROM raw_macro
-        WHERE value IS NOT NULL AND series_id IN (SELECT series_id FROM series)
+        SELECT
+            series_id,
+            available_date,
+            max(obs_date) AS obs_date,
+            arg_max(value, obs_date) AS value
+        FROM monotone
+        GROUP BY series_id, available_date
     )
     SELECT
         g.trade_date,
         g.series_id,
         o.value,
         o.obs_date AS value_date,
-        coalesce(o.obs_date < g.prev_trade_date, false) AS is_filled
+        coalesce(o.available_date < g.prev_trade_date, false) AS is_filled,
+        o.available_date,
+        CAST(g.trade_date - o.obs_date AS INTEGER) AS age_days
     FROM grid g
     ASOF LEFT JOIN obs o
-        ON o.series_id = g.series_id AND g.trade_date > o.obs_date
+        ON o.series_id = g.series_id AND g.trade_date > o.available_date
     """,
 )
 

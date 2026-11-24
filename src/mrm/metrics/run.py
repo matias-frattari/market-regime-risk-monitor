@@ -24,6 +24,7 @@ import pandas as pd
 from mrm.config import (
     default_portfolio_path,
     load_data_quality_config,
+    load_macro_lags,
     load_portfolio,
     load_price_adjustments,
 )
@@ -97,6 +98,7 @@ def main(
         portfolio = portfolio or load_portfolio(args.portfolio or default_portfolio_path())
         adjustments = load_price_adjustments() if adjustments is None else adjustments
         closures = load_data_quality_config().special_closures
+        macro_lags = load_macro_lags()
     except (OSError, ValueError) as exc:
         print(f"error: invalid config: {exc}")
         return 2
@@ -104,7 +106,7 @@ def main(
     own_con = con is None
     con = con or connect()
     try:
-        prepare_clean_prices(con, adjustments=adjustments)
+        prepare_clean_prices(con, adjustments=adjustments, macro_lags=macro_lags)
         prices, n_off_calendar = load_close_panel(con, closures)
         if prices.empty:
             print("error: prices_clean is empty; run `mrm ingest prices` first")

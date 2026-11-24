@@ -210,3 +210,14 @@ def test_risk_free_observed_on_the_last_day_is_not_used(
     upsert_macro(loaded, [MacroObservation("DGS3MO", DATES[-2], 50.0)])  # used on DATES[-1]
     main([], con=loaded, portfolio=P1, adjustments=[])
     assert sorted(loaded.execute(query).fetchall()) != before
+
+
+def test_invalid_macro_lags_config_exits_2(
+    loaded: duckdb.DuckDBPyConnection, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    def broken() -> None:
+        raise ValueError("macro series without a publication lag: NFCI")
+
+    monkeypatch.setattr("mrm.metrics.run.load_macro_lags", broken)
+    assert main([], con=loaded, portfolio=P1, adjustments=[]) == 2
+    assert "publication lag" in capsys.readouterr().out
