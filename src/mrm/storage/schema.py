@@ -14,6 +14,9 @@ TABLES: tuple[str, ...] = (
     "ingest_log",
     "dq_results",
     "price_adjustments",
+    "fact_returns",
+    "fact_risk_metrics",
+    "fact_correlations",
 )
 VIEWS: tuple[str, ...] = ("price_adjustment_status", "prices_clean", "macro_asof")
 
@@ -88,6 +91,44 @@ DDL: tuple[str, ...] = (
         multiplier                DOUBLE    NOT NULL CHECK (multiplier > 0),
         apply_if_raw_return_above DOUBLE    NOT NULL,
         synced_at                 TIMESTAMP NOT NULL  -- UTC
+    )
+    """,
+    # Metric tables (Phase 2), local only: rebuilt by mrm.metrics.run, never exported as-is.
+    # entity_id: ticker (asset), portfolio id (portfolio) or '<portfolio_id>:<ticker>' (holding).
+    """
+    CREATE TABLE IF NOT EXISTS fact_returns (
+        entity_id     VARCHAR   NOT NULL,
+        entity_type   VARCHAR   NOT NULL CHECK (entity_type IN ('asset', 'portfolio')),
+        trade_date    DATE      NOT NULL,
+        simple_return DOUBLE    NOT NULL,
+        log_return    DOUBLE    NOT NULL,
+        computed_at   TIMESTAMP NOT NULL,  -- UTC
+        PRIMARY KEY (entity_id, trade_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS fact_risk_metrics (
+        entity_id    VARCHAR   NOT NULL,
+        entity_type  VARCHAR   NOT NULL CHECK (entity_type IN ('asset', 'portfolio', 'holding')),
+        as_of_date   DATE      NOT NULL,
+        metric       VARCHAR   NOT NULL,
+        window_label VARCHAR   NOT NULL,
+        value        DOUBLE    NOT NULL,
+        n_obs        INTEGER   NOT NULL,
+        computed_at  TIMESTAMP NOT NULL,  -- UTC
+        PRIMARY KEY (entity_id, as_of_date, metric, window_label)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS fact_correlations (
+        ticker_a     VARCHAR   NOT NULL,
+        ticker_b     VARCHAR   NOT NULL,
+        trade_date   DATE      NOT NULL,
+        window_label VARCHAR   NOT NULL,
+        correlation  DOUBLE    NOT NULL CHECK (correlation BETWEEN -1 AND 1),
+        computed_at  TIMESTAMP NOT NULL,  -- UTC
+        PRIMARY KEY (ticker_a, ticker_b, trade_date, window_label),
+        CHECK (ticker_a < ticker_b)
     )
     """,
     # Raw simple return on each ex_date vs the previous stored trading day of the ticker.

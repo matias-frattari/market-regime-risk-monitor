@@ -94,7 +94,8 @@ def rolling_euler_contributions(
     for date, block in zip(end_dates, win, strict=True):
         if np.isnan(block).any():
             continue
-        rc, sigma = euler_contributions(np.cov(block, rowvar=False, ddof=1), w)
+        cov = np.atleast_2d(np.cov(block, rowvar=False, ddof=1))  # 1 holding -> 1x1
+        rc, sigma = euler_contributions(cov, w)
         if sigma == 0.0:
             continue
         scale = math.sqrt(periods)

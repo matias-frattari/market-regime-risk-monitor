@@ -96,3 +96,11 @@ def test_rolling_euler_skips_incomplete_windows_and_rejects_unknown_holdings() -
     assert result.trade_date.min() == panel.index[136]
     with pytest.raises(ValueError, match="Z"):
         rolling_euler_contributions(panel, {"A": 0.5, "Z": 0.5})
+
+
+def test_single_holding_contributes_all_the_risk() -> None:
+    panel = _panel()
+    result = rolling_euler_contributions(panel, {"C": 1.0}, window=126)
+    vol = rolling_volatility(panel["C"], window=126).dropna()
+    assert result["risk_contrib"].to_numpy() == pytest.approx(vol.to_numpy())
+    assert result["risk_contrib_pct"].to_numpy() == pytest.approx(1.0)

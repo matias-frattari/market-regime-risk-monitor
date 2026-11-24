@@ -3,6 +3,7 @@
     uv run mrm ingest prices [--tickers SPY,TLT] [--dry-run]   (= python -m mrm.ingest.prices)
     uv run mrm ingest macro  [--series DGS10] [--dry-run]      (= python -m mrm.ingest.macro)
     uv run mrm check         [--no-save]                       (= python -m mrm.quality.run)
+    uv run mrm metrics       [--portfolio PATH] [--dry-run]    (= python -m mrm.metrics.run)
 
 Each subcommand forwards its remaining arguments unchanged; options and exit codes are the
 ones of the target module. Imports are lazy so ``mrm check`` does not load the HTTP clients.
@@ -16,8 +17,12 @@ COMMANDS: dict[tuple[str, ...], str] = {
     ("ingest", "prices"): "mrm.ingest.prices",
     ("ingest", "macro"): "mrm.ingest.macro",
     ("check",): "mrm.quality.run",
+    ("metrics",): "mrm.metrics.run",
 }
-USAGE = "usage: mrm {ingest prices | ingest macro | check} [options]  (add --help for options)"
+USAGE = (
+    "usage: mrm {ingest prices | ingest macro | check | metrics} [options]"
+    "  (add --help for options)"
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

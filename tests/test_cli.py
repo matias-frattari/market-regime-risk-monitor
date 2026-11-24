@@ -29,6 +29,7 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list[str]]]:
         (["ingest", "macro", "--series", "NFCI"], "mrm.ingest.macro", ["--series", "NFCI"]),
         (["check"], "mrm.quality.run", []),
         (["check", "--no-save"], "mrm.quality.run", ["--no-save"]),
+        (["metrics", "--dry-run"], "mrm.metrics.run", ["--dry-run"]),
     ],
 )  # fmt: skip
 def test_dispatches_to_module_main(
