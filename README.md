@@ -34,6 +34,7 @@ uv run pytest
 # 5. Commands (populated as phases are built)
 # setup:   TBD
 # ingest:  uv run python -m mrm.ingest.prices [--tickers SPY,TLT] [--dry-run]
+# metrics: uv run mrm metrics [--portfolio PATH] [--dry-run]
 # test:    uv run pytest
 # export:  TBD
 ```

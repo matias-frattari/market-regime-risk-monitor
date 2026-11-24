@@ -1,6 +1,91 @@
 # Methodology
 
-> TODO: document metric definitions and regime classification logic (Phase 1+)
+> Regime classification: TODO (Phase 3).
+
+## Risk metrics (Phase 2)
+
+Code: `src/mrm/metrics/` (pure functions in `returns.py`, `risk.py`, `covariance.py`; rows
+assembled in `pipeline.py`; database I/O only in `io.py`). Run: `uv run mrm metrics`.
+Inputs: `close` from `prices_clean` and DGS3MO from `macro_asof`, never `raw_*`.
+Constants: 252 trading days per year, confidence 95%, rolling windows 60d (volatility) and
+126d (correlation, Euler).
+
+### Calendar, missing quotes and NaN
+
+- The calendar is the union of `trade_date` values in `prices_clean`. Prices are **not**
+  forward-filled or interpolated.
+- A return on day *t* needs a close on *t* and on the previous calendar row. If either is
+  missing the return is NaN, so a return never spans a gap. The price move over the gap is
+  therefore not counted, which is conservative but understates its risk.
+- **Portfolio:** NaN on any day where a holding's return is NaN; weights are never renormalised.
+- **Full-period metrics** drop NaN returns. **Rolling metrics** need a complete window
+  (`min_periods = window`): a NaN anywhere in the window gives no value for that date.
+- **Drawdown** skips NaN days in the wealth index (equivalent to a zero return over them).
+- NaN results are not stored (see `docs/data_dictionary.md`).
+- In the current warehouse all 13 tickers share the same 5000 trading days, so none of these
+  rules is triggered today; each is covered by a test.
+
+### Returns
+
+- Simple: `r_t = P_t / P_{t−1} − 1`. Log: `ℓ_t = ln(P_t / P_{t−1})`.
+- Risk metrics (volatility, VaR/CVaR, covariance, Euler) use **simple** returns because the
+  portfolio return is linear in them, which makes the Euler identity exact.
+- **Portfolio** (Phase 2): fixed weights from the portfolio yaml, rebalanced daily:
+  `r_p,t = Σ_i w_i r_i,t`. Monthly rebalancing with costs is the backtest's job (Phase 3).
+
+### Risk-free rate (DGS3MO)
+
+- DGS3MO is an annual yield in percent. Daily rate: `rf_t = (1 + y_t / 100)^(1/252) − 1`, so
+  252 daily rates compound back to the annual yield.
+- `y_t` is `macro_asof.value` on `trade_date = t`: the latest observation with
+  `obs_date < t`, i.e. the yield known at the close of *t−1*, which is the rate for the
+  return over *(t−1, t]*. No look-ahead.
+- **NULL at the start of the series:** the excess return is NaN and the day is excluded from
+  the Sharpe ratio only (volatility, VaR, etc. still use it). Never filled backwards or with 0.
+  `n_obs` of `sharpe` counts the days actually used.
+- **`is_filled = true`** (FRED holiday `.` or missing row): the carried value is the latest
+  information available on that date and is used as is. The run prints how many days were
+  NULL or filled (current warehouse: 0 NULL, 38 filled out of 4999 return days).
+
+### Formulas
+
+| Metric | Definition |
+|---|---|
+| Annualized volatility | `σ_ann = std(r, ddof=1) · √252` (≥ 2 returns) |
+| Rolling volatility 60d | same, over the 60 returns ending at *t* |
+| Annualized return | geometric: `exp(mean(ln(1 + r)) · 252) − 1` |
+| Drawdown | `W_t = Π_{s≤t}(1 + r_s)`, `W_0 = 1`; `DD_t = W_t / max(1, max_{s≤t} W_s) − 1` |
+| Max drawdown | `min_t DD_t` (negative; −0.25 = 25% peak-to-trough loss) |
+| Sharpe | `mean(r − rf) / std(r − rf, ddof=1) · √252`; no value when std ≤ 1e−12 (constant series) |
+| Historical VaR 95% | `q = Q_0.05(r)` with linear interpolation between order statistics (numpy `method="linear"`); `VaR = −q` |
+| Historical CVaR 95% | `−mean(r \| r ≤ q)` |
+| Parametric VaR 95% | Gaussian with sample `μ`, `σ` (ddof=1): `VaR = −(μ − z σ)`, `z = Φ⁻¹(0.95) ≈ 1.6449` |
+| Parametric CVaR 95% | `−(μ − σ φ(z) / 0.05)` (`φ(z)/0.05 ≈ 2.0627`) |
+| Rolling correlation 126d | Pearson correlation of each pair over the 126 returns ending at *t* |
+| Euler risk contribution | `Σ` = sample covariance (ddof=1) of the holdings' last 126 returns; `σ_p = √(wᵀΣw)`; `RC_i = w_i (Σw)_i / σ_p`; reported `× √252`, and `RC_i / σ_p` as a share |
+
+VaR/CVaR are **one-day** losses reported as positive numbers, computed on the full history
+(rolling VaR is planned for Phase 3, per regime). By Euler's theorem for the homogeneous
+function `σ_p(w)`, `Σ_i RC_i = σ_p`: the annualized contributions sum to the portfolio's 126d
+rolling volatility on each date, and the shares sum to 1.
+
+### No look-ahead
+
+Every rolling value at *t* uses only returns dated ≤ *t* (trailing windows); tests change data
+after *t* and check that the value at *t* does not move. The risk-free rate at *t* uses only
+observations dated before *t* (`macro_asof`).
+
+### Limitations
+
+- **Normality:** parametric VaR/CVaR assume Gaussian returns and understate tail risk when
+  returns are fat-tailed; the historical version is reported next to it for comparison.
+- **Full-period VaR** mixes calm and stress periods; it is not a forecast for today.
+- **Estimation error:** 60d/126d windows are noisy; correlations and Euler shares can swing.
+- **Daily rebalancing** of the Phase 2 portfolio is an idealisation without costs.
+- **Gaps:** returns over missing quotes are dropped, not spread (see above).
+- **Survivorship and data:** the universe is a fixed list of ETFs that exist today; prices
+  are provider-adjusted (ADR 0001) with documented corrections (ADR 0003).
+
 
 ## Macro data vintages (limitation)
 

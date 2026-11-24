@@ -9,6 +9,7 @@ Conventions:
   in the loaders and tests.
 - **Licensing:** `raw_prices` stays in the local warehouse only. Prices and daily per-ticker
   returns are never exported or committed (see `docs/decisions/0001-price-provider.md`).
+  The `fact_*` metric tables are local too; see "Metric tables" for what may be exported later.
 
 ## Data layers
 
@@ -168,6 +169,83 @@ holds only what the views need. PK: `adjustment_id`. Decision:
 
 Removing an entry from the yaml and running `mrm check` reverts the correction; `raw_prices`
 is never modified.
+
+### Metric tables (Phase 2, local only)
+
+Built by `uv run mrm metrics` (`mrm.metrics.run`) from `prices_clean` and DGS3MO in
+`macro_asof`; formulas in `docs/methodology.md`. Each run is a full rebuild in one transaction:
+asset rows, the run's portfolio rows and all correlations are deleted and re-inserted; rows of
+other portfolios are kept. `computed_at` (naive UTC) is the run time. NaN results are never
+stored: a missing row means "not computable" (incomplete window, no data, zero dispersion).
+
+**Not exported.** These tables stay in the gitignored warehouse. `fact_returns` holds daily
+per-ticker returns and is never exported. Per-ticker daily drawdown (`fact_risk_metrics`,
+`metric = 'drawdown'`, `entity_type = 'asset'`) and the daily rolling correlations in
+`fact_correlations` are derived from licensed prices and **need a licensing review before any
+export in Phase 5** (ADR 0001). Only aggregated metrics are planned for the Tableau CSVs.
+
+**Entity ids.** `entity_id` is the ticker (`asset`), the portfolio id from the portfolio yaml
+(`portfolio`), or `'<portfolio_id>:<ticker>'` for a holding's Euler contribution (`holding`).
+Chosen over a `portfolio_id` column because DuckDB primary-key columns cannot be NULL (asset
+rows would need a sentinel), while the prefix keeps the existing key unique across portfolios
+with no extra column. Portfolio ids are restricted to `[a-z0-9_-]`, so `:` is unambiguous.
+
+#### `fact_returns`
+Daily returns per asset and per portfolio. PK: `(entity_id, trade_date)`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| entity_id | VARCHAR | no | Ticker or portfolio id |
+| entity_type | VARCHAR | no | `asset` or `portfolio` (CHECK) |
+| trade_date | DATE | no | End day of the return; the start is the previous calendar row of `prices_clean` |
+| simple_return | DOUBLE | no | `P_t / P_{t-1} − 1`; portfolio: `Σ w_i r_i` (daily-rebalanced fixed weights) |
+| log_return | DOUBLE | no | `ln(P_t / P_{t-1})`; portfolio: `ln(1 + r_p)` |
+| computed_at | TIMESTAMP | no | Run time (UTC) |
+
+No row for the first day of a ticker, for a day without a quote, or for the day after it (a
+return never spans a gap). The portfolio has no row on days where any holding lacks a return.
+
+#### `fact_risk_metrics`
+Tidy (long) risk metrics. PK: `(entity_id, as_of_date, metric, window_label)`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| entity_id | VARCHAR | no | See "Entity ids" |
+| entity_type | VARCHAR | no | `asset`, `portfolio` or `holding` (CHECK) |
+| as_of_date | DATE | no | Last date of data used. `full` metrics: the entity's last return date |
+| metric | VARCHAR | no | See the table below |
+| window_label | VARCHAR | no | `full` (whole history), `60d` / `126d` (trailing window ending at `as_of_date`), `expanding` (from the first return to `as_of_date`) |
+| value | DOUBLE | no | Metric value (units below) |
+| n_obs | INTEGER | no | Returns used: window length, or count of non-missing returns (Sharpe: excess returns with a risk-free value) |
+| computed_at | TIMESTAMP | no | Run time (UTC) |
+
+| metric | window_label | entity_type | Grain | Unit |
+|---|---|---|---|---|
+| ann_return | full | asset, portfolio | one row | annualized geometric return (decimal) |
+| ann_vol | full | asset, portfolio | one row | annualized volatility (decimal) |
+| max_drawdown | full | asset, portfolio | one row | most negative drawdown (≤ 0) |
+| sharpe | full | asset, portfolio | one row | annualized Sharpe ratio, rf = DGS3MO |
+| var_hist_95, cvar_hist_95 | full | asset, portfolio | one row | 1-day historical VaR/CVaR 95%, positive loss |
+| var_param_95, cvar_param_95 | full | asset, portfolio | one row | 1-day Gaussian VaR/CVaR 95%, positive loss |
+| vol_60d | 60d | asset, portfolio | daily | annualized rolling volatility |
+| drawdown | expanding | asset, portfolio | daily | drawdown from the running peak (≤ 0) |
+| risk_contrib | 126d | holding | daily | Euler contribution, annualized volatility units; sums to the portfolio's 126d volatility |
+| risk_contrib_pct | 126d | holding | daily | share of portfolio volatility; sums to 1 per date |
+
+#### `fact_correlations`
+Rolling pairwise Pearson correlation of daily simple returns. PK:
+`(ticker_a, ticker_b, trade_date, window_label)`; CHECK `ticker_a < ticker_b` (each pair
+once) and `correlation` in [−1, 1].
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| ticker_a, ticker_b | VARCHAR | no | Pair, alphabetical order |
+| trade_date | DATE | no | Last day of the window |
+| window_label | VARCHAR | no | `126d` |
+| correlation | DOUBLE | no | Correlation over the 126 returns ending at `trade_date` |
+| computed_at | TIMESTAMP | no | Run time (UTC) |
+
+No row when the window has a missing return for either ticker or zero dispersion.
 
 ## Warehouse views
 

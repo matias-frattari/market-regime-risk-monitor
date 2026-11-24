@@ -71,7 +71,7 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 
 ## Data model (DuckDB)
 Tables: raw_prices, raw_macro, dim_asset, ingest_log, dq_results, price_adjustments, fact_returns,
-fact_risk_metrics, fact_regime, fact_backtest_equity, fact_backtest_summary.
+fact_risk_metrics, fact_correlations, fact_regime, fact_backtest_equity, fact_backtest_summary.
 Views: price_adjustment_status, prices_clean, macro_asof.
 Every table and view documented in docs/data_dictionary.md.
 
@@ -87,6 +87,8 @@ forward-fill only forward, NULL before a series starts. It reads `raw_macro` dir
 
 ## Status
 - Phase 1.6 done: `macro_asof` for the daily Treasury series.
+- Phase 2.1 done: risk metrics (`src/mrm/metrics`) into fact_returns, fact_risk_metrics,
+  fact_correlations (local only; nothing exported yet).
 - Pending for Phase 3 (own ADR on publication lags): CPIAUCSL, UNRATE, FEDFUNDS, NFCI,
   STLFSI4 in `macro_asof`. Never join them to prices on `obs_date`.
 
@@ -140,5 +142,9 @@ live Tableau Public link; methodology and limitations documented.
   (same options and exit codes)
 - data quality: `uv run mrm check [--no-save]` (thresholds in config/data_quality.yaml; prints
   the report by severity, appends to `dq_results`; exit 1 only on critical findings)
+- risk metrics: `uv run mrm metrics [--portfolio PATH] [--dry-run]` (= `python -m mrm.metrics.run`;
+  reads prices_clean + DGS3MO from macro_asof, full rebuild of the fact_* metric tables in one
+  transaction; portfolio from `config/portfolio.yaml` if present, else `portfolio.example.yaml`;
+  prints counts and date ranges only; exit 1 no data / holding without prices, 2 config error)
 - test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - export: TBD

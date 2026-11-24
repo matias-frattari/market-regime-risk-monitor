@@ -76,6 +76,9 @@ ingest ──► raw_*  (tables)      provider data as loaded; only the ingestio
              │                   macro_asof = raw_macro (daily series), on the prices_clean trading days
              ▼
    metrics / regimes / portfolio / exports / data quality checks
+             │                   metrics -> fact_returns, fact_risk_metrics, fact_correlations
+             ▼                   (local only; formulas in docs/methodology.md)
+   data/exports/*.csv (aggregated metrics only, Phase 5)
 ```
 
 **Rule: everything after the ingestion reads `*_clean` / `*_asof`, never `raw_*`.**
