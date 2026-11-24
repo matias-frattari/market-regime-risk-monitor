@@ -5,7 +5,8 @@ CLI::
 
     uv run mrm metrics [--portfolio PATH] [--dry-run]
 
-Reads ``prices_clean`` (the clean layer is prepared first) and DGS3MO from ``macro_asof``.
+Reads ``prices_clean`` (the clean layer is prepared first; rows on dates that are not NYSE
+trading days are discarded and counted) and DGS3MO from ``macro_asof``.
 Prints only counts and date ranges: never prices or per-ticker returns.
 
 Exit codes: 0 success, 1 no usable data, 2 config error.
@@ -20,7 +21,12 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from mrm.config import default_portfolio_path, load_portfolio, load_price_adjustments
+from mrm.config import (
+    default_portfolio_path,
+    load_data_quality_config,
+    load_portfolio,
+    load_price_adjustments,
+)
 from mrm.metrics.io import (
     RISK_FREE_SERIES,
     load_close_panel,
@@ -89,6 +95,7 @@ def main(
     try:
         portfolio = portfolio or load_portfolio(args.portfolio or default_portfolio_path())
         adjustments = load_price_adjustments() if adjustments is None else adjustments
+        closures = load_data_quality_config().special_closures
     except (OSError, ValueError) as exc:
         print(f"error: invalid config: {exc}")
         return 2
@@ -97,7 +104,7 @@ def main(
     con = con or connect()
     try:
         prepare_clean_prices(con, adjustments=adjustments)
-        prices = load_close_panel(con)
+        prices, n_off_calendar = load_close_panel(con, closures)
         if prices.empty:
             print("error: prices_clean is empty; run `mrm ingest prices` first")
             return 1
@@ -125,6 +132,7 @@ def main(
         f"prices_clean: {prices.shape[1]} tickers, {len(prices)} trading days, "
         f"{_fmt_range(prices.index.min(), prices.index.max())}"
     )
+    print(f"off-calendar rows discarded (not NYSE trading days): {n_off_calendar}")
     for line in _risk_free_lines(rf, pd.DatetimeIndex(port_days)):
         print(line)
     print(f"{'table':<20}{'rows':>10}{'entities':>10}  date range")

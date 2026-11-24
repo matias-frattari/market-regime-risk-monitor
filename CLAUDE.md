@@ -143,7 +143,8 @@ live Tableau Public link; methodology and limitations documented.
 - data quality: `uv run mrm check [--no-save]` (thresholds in config/data_quality.yaml; prints
   the report by severity, appends to `dq_results`; exit 1 only on critical findings)
 - risk metrics: `uv run mrm metrics [--portfolio PATH] [--dry-run]` (= `python -m mrm.metrics.run`;
-  reads prices_clean + DGS3MO from macro_asof, full rebuild of the fact_* metric tables in one
+  reads prices_clean (rows off the NYSE calendar are discarded and counted) + DGS3MO from
+  macro_asof, full rebuild of the fact_* metric tables in one
   transaction; portfolio from `config/portfolio.yaml` if present, else `portfolio.example.yaml`;
   prints counts and date ranges only; exit 1 no data / holding without prices, 2 config error)
 - test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`

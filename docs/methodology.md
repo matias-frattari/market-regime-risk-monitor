@@ -12,8 +12,12 @@ Constants: 252 trading days per year, confidence 95%, rolling windows 60d (volat
 
 ### Calendar, missing quotes and NaN
 
-- The calendar is the union of `trade_date` values in `prices_clean`. Prices are **not**
-  forward-filled or interpolated.
+- The calendar is the union of `trade_date` values in `prices_clean`, **filtered to NYSE
+  trading days** (`mrm.quality.calendar`, special closures from `config/data_quality.yaml`).
+  Rows on other dates (a weekend or holiday row from the provider) are discarded and counted in
+  the run summary; otherwise one stray row in any ticker would put a NaN in every other ticker's
+  returns and void their rolling windows for 60/126 days. Missing NYSE days are **not** added
+  (gaps are reported by `mrm check`). Prices are **not** forward-filled or interpolated.
 - A return on day *t* needs a close on *t* and on the previous calendar row. If either is
   missing the return is NaN, so a return never spans a gap. The price move over the gap is
   therefore not counted, which is conservative but understates its risk.

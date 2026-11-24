@@ -197,7 +197,7 @@ Daily returns per asset and per portfolio. PK: `(entity_id, trade_date)`.
 |---|---|---|---|
 | entity_id | VARCHAR | no | Ticker or portfolio id |
 | entity_type | VARCHAR | no | `asset` or `portfolio` (CHECK) |
-| trade_date | DATE | no | End day of the return; the start is the previous calendar row of `prices_clean` |
+| trade_date | DATE | no | End day of the return; the start is the previous calendar row (union of `prices_clean` dates filtered to NYSE trading days) |
 | simple_return | DOUBLE | no | `P_t / P_{t-1} − 1`; portfolio: `Σ w_i r_i` (daily-rebalanced fixed weights) |
 | log_return | DOUBLE | no | `ln(P_t / P_{t-1})`; portfolio: `ln(1 + r_p)` |
 | computed_at | TIMESTAMP | no | Run time (UTC) |

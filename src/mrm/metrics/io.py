@@ -4,24 +4,39 @@ The only module of ``mrm.metrics`` that touches the database. Callers must run
 ``mrm.storage.clean.prepare_clean_prices(con)`` first. Never reads ``raw_*``.
 """
 
-from datetime import datetime
+from collections.abc import Collection
+from datetime import date, datetime
 
 import duckdb
 import pandas as pd
 
 from mrm.metrics.pipeline import MetricsResult
+from mrm.quality.calendar import is_nyse_business_day
 
 RISK_FREE_SERIES = "DGS3MO"
 
 
-def load_close_panel(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
-    """Wide close panel from ``prices_clean``: index = every trade_date in the view (union
-    across tickers), one column per ticker, NaN where a ticker has no row that day."""
+def load_close_panel(
+    con: duckdb.DuckDBPyConnection, special_closures: Collection[date] = ()
+) -> tuple[pd.DataFrame, int]:
+    """Wide close panel from ``prices_clean`` and the number of off-calendar rows discarded.
+
+    Index = the union of trade_dates across tickers, **filtered to NYSE trading days**
+    (``mrm.quality.calendar``; ``special_closures`` from config/data_quality.yaml). Rows on
+    other dates are dropped so that one stray row cannot break every other ticker's returns.
+    Missing NYSE days are not added (gaps are reported by ``mrm check``). One column per
+    ticker, NaN where a ticker has no row that day.
+    """
     long = con.execute("SELECT trade_date, ticker, close FROM prices_clean").df()
+    days = pd.to_datetime(long["trade_date"]).dt.date
+    on_calendar = {d: is_nyse_business_day(d, special_closures) for d in set(days)}
+    keep = days.map(on_calendar).astype(bool).to_numpy()
+    discarded = int((~keep).sum())
+    long = long[keep]
     panel = long.pivot(index="trade_date", columns="ticker", values="close").sort_index()
     panel.index = pd.DatetimeIndex(panel.index, name="trade_date")
     panel.columns.name = None
-    return panel.sort_index(axis=1)
+    return panel.sort_index(axis=1), discarded
 
 
 def load_risk_free(

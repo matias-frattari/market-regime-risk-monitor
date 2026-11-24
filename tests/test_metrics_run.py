@@ -1,6 +1,6 @@
 # SYNTHETIC — not real market data. Prices are a seeded random walk and DGS3MO a made-up
-# constant, on business-day dates, only to exercise the metrics runner end to end.
-from datetime import date
+# constant, on NYSE trading days, only to exercise the metrics runner end to end.
+from datetime import date, timedelta
 
 import duckdb
 import numpy as np
@@ -9,6 +9,7 @@ import pytest
 
 from mrm.metrics.pipeline import compute_metrics
 from mrm.metrics.run import main
+from mrm.quality.calendar import nyse_business_days
 from mrm.storage.loaders import upsert_macro, upsert_prices
 from mrm.storage.models import MacroObservation, Portfolio, PriceBar
 
@@ -20,7 +21,7 @@ FULL_METRICS = {
     "ann_return", "ann_vol", "max_drawdown", "sharpe",
     "var_hist_95", "cvar_hist_95", "var_param_95", "cvar_param_95",
 }  # fmt: skip
-DATES = [d.date() for d in pd.bdate_range("2024-01-01", periods=N_DAYS)]
+DATES = nyse_business_days(date(2024, 1, 2), date(2025, 1, 31))[:N_DAYS]
 RF_START = 10  # DGS3MO has no observation before DATES[RF_START] -> NULL on early days
 
 
@@ -47,8 +48,8 @@ def loaded(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def _count(con: duckdb.DuckDBPyConnection, sql: str) -> int:
-    return con.execute(sql).fetchone()[0]
+def _count(con: duckdb.DuckDBPyConnection, sql: str, params: list | None = None) -> int:
+    return con.execute(sql, params or []).fetchone()[0]
 
 
 def test_run_writes_expected_row_counts(loaded: duckdb.DuckDBPyConnection) -> None:
@@ -70,6 +71,24 @@ def test_run_writes_expected_row_counts(loaded: duckdb.DuckDBPyConnection) -> No
     ).fetchall()
     assert {e for e, _ in full} == {*TICKERS, "p1"}
     assert all(set(metrics) == FULL_METRICS for _, metrics in full)
+
+
+def test_off_calendar_row_is_discarded_and_counted(
+    loaded: duckdb.DuckDBPyConnection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # One stray Saturday row in GLD (not a holding) must not break the other tickers.
+    saturday = next(
+        d for d in (DATES[100] + timedelta(days=i) for i in range(7)) if d.weekday() == 5
+    )
+    upsert_prices(loaded, [PriceBar("GLD", saturday, None, None, None, 100.0, None)])
+    assert main([], con=loaded, portfolio=P1, adjustments=[]) == 0
+    assert "off-calendar rows discarded (not NYSE trading days): 1" in capsys.readouterr().out
+    n_win = N_DAYS - 1 - 125
+    assert _count(loaded, "SELECT count(*) FROM fact_correlations") == 3 * n_win
+    assert _count(
+        loaded, "SELECT count(*) FROM fact_risk_metrics WHERE metric = 'vol_60d'"
+    ) == 4 * (N_DAYS - 60)
+    assert _count(loaded, "SELECT count(*) FROM fact_returns WHERE trade_date = ?", [saturday]) == 0
 
 
 def test_sharpe_excludes_null_risk_free_days(loaded: duckdb.DuckDBPyConnection) -> None:
