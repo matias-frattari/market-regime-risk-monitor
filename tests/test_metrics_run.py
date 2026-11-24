@@ -155,6 +155,22 @@ def test_missing_holding_or_empty_prices_exit_1(con: duckdb.DuckDBPyConnection) 
     assert main([], con=con, portfolio=P1, adjustments=[]) == 1  # TLT has no prices
 
 
+def test_asset_drawdown_keeps_a_move_across_a_missing_quote() -> None:
+    prices = pd.DataFrame(
+        {t: _closes(i) for i, t in enumerate(TICKERS)}, index=pd.DatetimeIndex(DATES)
+    )
+    prices.iloc[150:, 1] *= 0.5  # TLT halves across a missing quote on DATES[150]
+    prices.iloc[150, 1] = np.nan
+    m = compute_metrics(prices, pd.Series(np.nan, index=prices.index), P1).risk_metrics
+    tlt = m[m.entity_id == "TLT"].set_index("metric")
+    assert tlt.loc["max_drawdown", "value"] < -0.45
+    assert tlt.loc["max_drawdown", "n_obs"] == N_DAYS - 1  # intervals across the gap count
+    dd_days = m[(m.entity_id == "TLT") & (m.metric == "drawdown")].as_of_date
+    assert pd.Timestamp(DATES[151]) in set(dd_days)  # the day after the gap has a value
+    port = m[m.entity_id == "p1"].set_index("metric")  # portfolio: return-based (limitation)
+    assert port.loc["max_drawdown", "value"] > -0.3
+
+
 def test_compute_metrics_is_pure_and_matches_written_rows(
     loaded: duckdb.DuckDBPyConnection,
 ) -> None:

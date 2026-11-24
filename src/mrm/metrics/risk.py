@@ -42,10 +42,45 @@ def annualized_return(returns: pd.Series, periods: int = TRADING_DAYS) -> float:
     return float(math.exp(np.log1p(r).mean() * periods) - 1.0)
 
 
+def return_intervals(prices: pd.Series) -> pd.Series:
+    """For each date with a close: calendar intervals since the first close (rows spanned - 1)."""
+    positions = pd.Series(np.arange(len(prices)), index=prices.index)[prices.notna()]
+    return positions - positions.iloc[0] if not positions.empty else positions
+
+
+def annualized_return_from_prices(prices: pd.Series, periods: int = TRADING_DAYS) -> float:
+    """Geometric annualized return from the close level: ``(P_last / P_first)^(periods / N) - 1``.
+
+    ``N`` = return intervals between the first and last close on the calendar (rows spanned - 1,
+    intervals across a missing quote included), so the move over a gap is kept. Without gaps
+    this equals :func:`annualized_return` of the daily returns. NaN when ``N < 1``.
+    """
+    p = prices.dropna()
+    if p.empty:
+        return math.nan
+    n = int(return_intervals(prices).iloc[-1])
+    if n < 1:
+        return math.nan
+    return float((p.iloc[-1] / p.iloc[0]) ** (periods / n) - 1.0)
+
+
+def price_drawdown(prices: pd.Series) -> pd.Series:
+    """Drawdown from the running peak of the close level: ``DD_t = P_t / max_{s<=t} P_s - 1``.
+
+    Defined on every date with a close except the first (which has no return), so a price move
+    across a missing quote is kept. NaN where there is no close.
+    """
+    p = prices.dropna()
+    dd = (p / p.cummax() - 1.0).iloc[1:]
+    return dd.reindex(prices.index)
+
+
 def drawdown(returns: pd.Series) -> pd.Series:
     """Drawdown from the running peak of the wealth index ``W_t = prod(1 + r)``, ``W_0 = 1``.
 
-    ``DD_t = W_t / max(1, max_{s<=t} W_s) - 1`` (<= 0). NaN returns are skipped and stay NaN.
+    ``DD_t = W_t / max(1, max_{s<=t} W_s) - 1`` (<= 0). NaN returns are skipped and stay NaN,
+    so a move across a missing quote is lost: used for the portfolio only; assets use
+    :func:`price_drawdown`.
     """
     r = returns.dropna()
     wealth = (1.0 + r).cumprod()

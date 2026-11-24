@@ -216,7 +216,7 @@ Tidy (long) risk metrics. PK: `(entity_id, as_of_date, metric, window_label)`.
 | metric | VARCHAR | no | See the table below |
 | window_label | VARCHAR | no | `full` (whole history), `60d` / `126d` (trailing window ending at `as_of_date`), `expanding` (from the first return to `as_of_date`) |
 | value | DOUBLE | no | Metric value (units below) |
-| n_obs | INTEGER | no | Returns used: window length, or count of non-missing returns (Sharpe: excess returns with a risk-free value) |
+| n_obs | INTEGER | no | Returns used: window length, or count of non-missing returns (Sharpe: excess returns with a risk-free value). Asset `ann_return`, `max_drawdown` and `drawdown`: return intervals spanned since the first close (gaps included) |
 | computed_at | TIMESTAMP | no | Run time (UTC) |
 
 | metric | window_label | entity_type | Grain | Unit |
@@ -228,7 +228,7 @@ Tidy (long) risk metrics. PK: `(entity_id, as_of_date, metric, window_label)`.
 | var_hist_95, cvar_hist_95 | full | asset, portfolio | one row | 1-day historical VaR/CVaR 95%, positive loss |
 | var_param_95, cvar_param_95 | full | asset, portfolio | one row | 1-day Gaussian VaR/CVaR 95%, positive loss |
 | vol_60d | 60d | asset, portfolio | daily | annualized rolling volatility |
-| drawdown | expanding | asset, portfolio | daily | drawdown from the running peak (≤ 0) |
+| drawdown | expanding | asset, portfolio | daily | drawdown from the running peak (≤ 0); asset: from the close level, portfolio: from returns |
 | risk_contrib | 126d | holding | daily | Euler contribution, annualized volatility units; sums to the portfolio's 126d volatility |
 | risk_contrib_pct | 126d | holding | daily | share of portfolio volatility; sums to 1 per date |
 

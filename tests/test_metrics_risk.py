@@ -6,13 +6,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from mrm.metrics.returns import simple_returns
 from mrm.metrics.risk import (
     annualized_return,
+    annualized_return_from_prices,
     annualized_volatility,
     drawdown,
     historical_var_cvar,
     max_drawdown,
     parametric_var_cvar,
+    price_drawdown,
     rolling_volatility,
     sharpe_ratio,
 )
@@ -66,6 +69,33 @@ def test_drawdown_counts_a_first_day_loss_and_keeps_nan_days() -> None:
 
 def test_annualized_return_of_constant_daily_return() -> None:
     assert annualized_return(_series([0.0004] * 252)) == pytest.approx(1.0004**252 - 1)
+
+
+def test_price_drawdown_keeps_a_move_across_a_missing_quote() -> None:
+    # Return-based drawdown loses the -20% move: the return spanning the gap is NaN.
+    close = _series([100.0, 100.0, np.nan, 80.0, 80.0])
+    assert max_drawdown(simple_returns(close.to_frame())[0]) == 0.0
+    dd = price_drawdown(close)
+    assert math.isnan(dd.iloc[0]) and math.isnan(dd.iloc[2])  # first close, no close
+    assert dd.iloc[[1, 3, 4]].tolist() == pytest.approx([0.0, -0.20, -0.20])
+
+
+def test_annualized_return_from_prices_counts_intervals_across_a_gap() -> None:
+    close = _series([np.nan, 100.0, np.nan, 121.0, np.nan])  # 2 intervals, +21%
+    assert annualized_return_from_prices(close) == pytest.approx(1.21 ** (252 / 2) - 1)
+    assert math.isnan(annualized_return_from_prices(_series([np.nan, 100.0, np.nan])))
+
+
+def test_level_metrics_equal_return_based_metrics_without_gaps() -> None:
+    rng = np.random.default_rng(7)  # synthetic random walk, not market data
+    close = _series(100.0 * np.exp(np.cumsum(rng.normal(0.0003, 0.012, 5000))))
+    r = simple_returns(close.to_frame())[0]  # 4999 returns
+    old = annualized_return(r)
+    assert old == pytest.approx(math.exp(np.log1p(r.dropna()).mean() * 252) - 1, rel=1e-15)
+    assert annualized_return_from_prices(close) == pytest.approx(old, rel=1e-12, abs=0)
+    new_dd, old_dd = price_drawdown(close), drawdown(r)
+    assert new_dd.isna().equals(old_dd.isna())
+    assert np.allclose(new_dd.dropna(), old_dd.dropna(), rtol=0, atol=1e-12)
 
 
 def test_sharpe_known_value_and_degenerate_cases() -> None:

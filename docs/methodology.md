@@ -19,12 +19,17 @@ Constants: 252 trading days per year, confidence 95%, rolling windows 60d (volat
   returns and void their rolling windows for 60/126 days. Missing NYSE days are **not** added
   (gaps are reported by `mrm check`). Prices are **not** forward-filled or interpolated.
 - A return on day *t* needs a close on *t* and on the previous calendar row. If either is
-  missing the return is NaN, so a return never spans a gap. The price move over the gap is
-  therefore not counted, which is conservative but understates its risk.
+  missing the return is NaN, so a return never spans a gap. Return-based metrics (volatility,
+  VaR/CVaR, Sharpe, correlation, Euler) therefore do not see the price move over the gap; this
+  **understates** risk (it is not conservative).
+- **Level-based asset metrics** (drawdown, max drawdown, annualized return) are computed from
+  the close level instead, so the move across a gap is kept (see Formulas).
 - **Portfolio:** NaN on any day where a holding's return is NaN; weights are never renormalised.
 - **Full-period metrics** drop NaN returns. **Rolling metrics** need a complete window
   (`min_periods = window`): a NaN anywhere in the window gives no value for that date.
-- **Drawdown** skips NaN days in the wealth index (equivalent to a zero return over them).
+- **Portfolio drawdown and annualized return** are still built from the portfolio's daily
+  returns: a day without a return (the gap day *and* the day after it) is skipped, so the move
+  across a holding's missing quote is lost. Limitation, not triggered by the current data.
 - NaN results are not stored (see `docs/data_dictionary.md`).
 - In the current warehouse all 13 tickers share the same 5000 trading days, so none of these
   rules is triggered today; each is covered by a test.
@@ -57,8 +62,10 @@ Constants: 252 trading days per year, confidence 95%, rolling windows 60d (volat
 |---|---|
 | Annualized volatility | `σ_ann = std(r, ddof=1) · √252` (≥ 2 returns) |
 | Rolling volatility 60d | same, over the 60 returns ending at *t* |
-| Annualized return | geometric: `exp(mean(ln(1 + r)) · 252) − 1` |
-| Drawdown | `W_t = Π_{s≤t}(1 + r_s)`, `W_0 = 1`; `DD_t = W_t / max(1, max_{s≤t} W_s) − 1` |
+| Annualized return (asset) | geometric, from the close level: `(P_last / P_first)^(252 / N) − 1`, `N` = return intervals between the first and last close (calendar rows spanned − 1, intervals across a gap included). Without gaps this equals `exp(mean(ln(1 + r)) · 252) − 1` |
+| Annualized return (portfolio) | `exp(mean(ln(1 + r_p)) · 252) − 1` over the days with a portfolio return |
+| Drawdown (asset) | `DD_t = P_t / max_{s≤t} P_s − 1` on every close except the first |
+| Drawdown (portfolio) | `W_t = Π_{s≤t}(1 + r_s)`, `W_0 = 1`; `DD_t = W_t / max(1, max_{s≤t} W_s) − 1` |
 | Max drawdown | `min_t DD_t` (negative; −0.25 = 25% peak-to-trough loss) |
 | Sharpe | `mean(r − rf) / std(r − rf, ddof=1) · √252`; no value when std ≤ 1e−12 (constant series) |
 | Historical VaR 95% | `q = Q_0.05(r)` with linear interpolation between order statistics (numpy `method="linear"`); `VaR = −q` |
@@ -86,7 +93,8 @@ observations dated before *t* (`macro_asof`).
 - **Full-period VaR** mixes calm and stress periods; it is not a forecast for today.
 - **Estimation error:** 60d/126d windows are noisy; correlations and Euler shares can swing.
 - **Daily rebalancing** of the Phase 2 portfolio is an idealisation without costs.
-- **Gaps:** returns over missing quotes are dropped, not spread (see above).
+- **Gaps:** returns over missing quotes are dropped, not spread (see above); asset drawdown and
+  annualized return keep the move, the portfolio's do not.
 - **Survivorship and data:** the universe is a fixed list of ETFs that exist today; prices
   are provider-adjusted (ADR 0001) with documented corrections (ADR 0003).
 

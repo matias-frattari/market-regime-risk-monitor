@@ -19,11 +19,14 @@ from mrm.metrics.returns import (
 )
 from mrm.metrics.risk import (
     annualized_return,
+    annualized_return_from_prices,
     annualized_volatility,
     drawdown,
     historical_var_cvar,
     max_drawdown,
     parametric_var_cvar,
+    price_drawdown,
+    return_intervals,
     rolling_volatility,
     sharpe_ratio,
 )
@@ -65,8 +68,44 @@ def _returns_rows(
     return frame[RETURN_COLUMNS]
 
 
+@dataclass(frozen=True, slots=True)
+class _Level:
+    """Level-based metrics: from the close for assets, from the returns for the portfolio."""
+
+    drawdown: pd.Series
+    dd_n_obs: pd.Series
+    ann_return: float
+    max_drawdown: float
+    n_intervals: int
+
+
+def _asset_level(close: pd.Series) -> _Level:
+    """From the close level, so a move across a missing quote is kept (see methodology.md)."""
+    dd = price_drawdown(close)
+    intervals = return_intervals(close)
+    return _Level(
+        drawdown=dd,
+        dd_n_obs=intervals.reindex(close.index),
+        ann_return=annualized_return_from_prices(close),
+        max_drawdown=float(dd.min()) if dd.notna().any() else np.nan,
+        n_intervals=int(intervals.iloc[-1]) if not intervals.empty else 0,
+    )
+
+
+def _portfolio_level(r: pd.Series) -> _Level:
+    """From the returns: a day where any holding has no return is skipped (limitation)."""
+    n = int(r.notna().sum())
+    return _Level(
+        drawdown=drawdown(r),
+        dd_n_obs=r.notna().cumsum(),
+        ann_return=annualized_return(r),
+        max_drawdown=max_drawdown(r),
+        n_intervals=n,
+    )
+
+
 def _full_period_rows(
-    r: pd.Series, rf_daily: pd.Series, entity_id: str, entity_type: str
+    r: pd.Series, rf_daily: pd.Series, entity_id: str, entity_type: str, level: _Level
 ) -> list[tuple]:
     observed = r.dropna()
     if observed.empty:
@@ -77,9 +116,9 @@ def _full_period_rows(
     var_p, cvar_p = parametric_var_cvar(r)
     n = len(observed)
     values = [
-        ("ann_return", annualized_return(r), n),
+        ("ann_return", level.ann_return, level.n_intervals),
         ("ann_vol", annualized_volatility(r), n),
-        ("max_drawdown", max_drawdown(r), n),
+        ("max_drawdown", level.max_drawdown, level.n_intervals),
         ("sharpe", sharpe_ratio(excess), len(excess)),
         ("var_hist_95", var_h, n),
         ("cvar_hist_95", cvar_h, n),
@@ -101,18 +140,21 @@ def _series_rows(
 
 
 def _entity_metrics(
-    r: pd.Series, rf_daily: pd.Series, entity_id: str, entity_type: str, vol_window: int
+    r: pd.Series,
+    rf_daily: pd.Series,
+    entity_id: str,
+    entity_type: str,
+    vol_window: int,
+    level: _Level,
 ) -> list[pd.DataFrame]:
     full = pd.DataFrame(
-        _full_period_rows(r, rf_daily, entity_id, entity_type), columns=METRIC_COLUMNS
+        _full_period_rows(r, rf_daily, entity_id, entity_type, level), columns=METRIC_COLUMNS
     )
     vol = _series_rows(
         rolling_volatility(r, vol_window), vol_window, entity_id, entity_type,
         f"vol_{vol_window}d", f"{vol_window}d",
     )  # fmt: skip
-    dd = _series_rows(
-        drawdown(r), r.notna().cumsum(), entity_id, entity_type, "drawdown", EXPANDING
-    )
+    dd = _series_rows(level.drawdown, level.dd_n_obs, entity_id, entity_type, "drawdown", EXPANDING)
     return [full, vol, dd]
 
 
@@ -140,8 +182,12 @@ def compute_metrics(
 
     metric_frames: list[pd.DataFrame] = []
     for ticker in simple.columns:
-        metric_frames += _entity_metrics(simple[ticker], rf_daily, ticker, "asset", vol_window)
-    metric_frames += _entity_metrics(port, rf_daily, pid, "portfolio", vol_window)
+        metric_frames += _entity_metrics(
+            simple[ticker], rf_daily, ticker, "asset", vol_window, _asset_level(prices[ticker])
+        )
+    metric_frames += _entity_metrics(
+        port, rf_daily, pid, "portfolio", vol_window, _portfolio_level(port)
+    )
 
     euler = rolling_euler_contributions(simple, portfolio.weights, window=corr_window)
     label = f"{corr_window}d"
