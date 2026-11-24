@@ -73,7 +73,7 @@ ingest ──► raw_*  (tables)      provider data as loaded; only the ingestio
              │                   prices_clean = raw_prices + config/price_adjustments.yaml
              ▼
            *_asof  (views)       point-in-time: no look-ahead + forward-fill
-             │                   macro_asof = raw_macro (daily series), on the prices_clean trading days
+             │                   macro_asof = raw_macro + config/macro_lags.yaml, on the prices_clean trading days
              ▼
    metrics / regimes / portfolio / exports / data quality checks
              │                   metrics -> fact_returns, fact_risk_metrics, fact_correlations
@@ -85,15 +85,16 @@ ingest ──► raw_*  (tables)      provider data as loaded; only the ingestio
 `raw_*` stays the provider's data so that every correction is visible, testable and can be
 reverted by editing config. The data quality checks on prices also read `prices_clean`.
 `macro_asof` reads `raw_macro` directly, a documented exception: macro values need no
-correction today, so there is no `macro_clean`. It covers the daily Treasury series (DGS10,
-DGS2, DGS3MO, T10Y2Y) with the strict rule `obs_date < trade_date`; the series with
-publication lags (CPIAUCSL, UNRATE, FEDFUNDS, NFCI, STLFSI4) are pending for Phase 3 with
-their own ADR. Columns and rules: `docs/data_dictionary.md`.
+correction today, so there is no `macro_clean`. It covers all 9 FRED series: a value is used
+only after its release, `obs_date + lag_days < trade_date` (lag 0 for the daily Treasury
+series, i.e. the Phase 1.6 rule; per-series lags and delayed-release overrides in
+`config/macro_lags.yaml`, ADR 0005). Columns and rules: `docs/data_dictionary.md`.
 
 The clean layer is prepared by `mrm.storage.clean.prepare_clean_prices(con)`. It creates the
-schema (tables and views) and syncs `config/price_adjustments.yaml` into `price_adjustments`.
-Call it before reading `prices_clean`; `mrm check` does so first. The ingestion does not call
-it and is unchanged.
+schema (tables and views) and syncs `config/price_adjustments.yaml` into `price_adjustments`
+and `config/macro_lags.yaml` into `macro_publication_lags` / `macro_release_overrides`.
+Call it before reading `prices_clean` or `macro_asof`; `mrm check` and `mrm metrics` do so
+first. The ingestion does not call it and is unchanged.
 
 **Conditional corrections.** An adjustment applies only while the raw data still shows the
 error (raw return on the ex-date above a configured threshold), evaluated inside the view on

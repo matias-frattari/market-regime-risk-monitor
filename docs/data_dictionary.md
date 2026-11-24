@@ -17,7 +17,7 @@ Conventions:
 |---|---|---|
 | `raw_*` | tables `raw_prices`, `raw_macro` | Provider data exactly as loaded. Only the ingestion writes here |
 | `*_clean` | view `prices_clean` | Documented, reversible corrections (from `config/`). One row per raw row, nothing imputed |
-| `*_asof` | view `macro_asof` | Point-in-time: no look-ahead, forward-fill, aligned to the trading days of `prices_clean` |
+| `*_asof` | view `macro_asof` | Point-in-time: no look-ahead (publication lags of `config/macro_lags.yaml`), forward-fill, aligned to the trading days of `prices_clean` |
 
 Everything downstream (metrics, regimes, portfolio, exports, data quality checks on prices)
 reads `*_clean` / `*_asof`, **never** `raw_*`.
@@ -170,6 +170,36 @@ holds only what the views need. PK: `adjustment_id`. Decision:
 Removing an entry from the yaml and running `mrm check` reverts the correction; `raw_prices`
 is never modified.
 
+### `macro_publication_lags`
+Publication lag per macro series, synced from `config/macro_lags.yaml` by
+`mrm.storage.clean.prepare_clean_prices` (delete + insert together with
+`macro_release_overrides`, one transaction; run by `mrm check` and `mrm metrics`). The yaml is
+the source of truth and holds the sources; the yaml must list exactly the series of
+`config/macro.yaml`. `macro_asof` exposes exactly the series of this table. PK: `series_id`.
+Decision: `docs/decisions/0005-macro-publication-lags.md`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| series_id | VARCHAR | no | FRED series id |
+| frequency | VARCHAR | no | `daily`, `weekly` or `monthly` (CHECK) |
+| lag_days | INTEGER | no | Days from `obs_date` to the release (≥ 0, CHECK); 0 for the daily Treasury series |
+| synced_at | TIMESTAMP | no | Sync time (UTC) |
+
+### `macro_release_overrides`
+Documented delayed first releases: the date replaces `obs_date + lag_days` for one
+observation. Synced with `macro_publication_lags`. The loader rejects an override that is not
+later than `obs_date + lag_days` (overrides only delay). PK: `(series_id, obs_date)`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| series_id | VARCHAR | no | FRED series id |
+| obs_date | DATE | no | Reference date of the delayed observation |
+| available_date | DATE | no | First-release date on ALFRED (> `obs_date`, CHECK) |
+| reason | VARCHAR | no | Cause of the delay (marked "not verified" when unconfirmed) |
+| synced_at | TIMESTAMP | no | Sync time (UTC) |
+
+Today: 9 series, 8 overrides (CPIAUCSL 1, UNRATE 3, NFCI 4).
+
 ### Metric tables (Phase 2, local only)
 
 Built by `uv run mrm metrics` (`mrm.metrics.run`) from `prices_clean` and DGS3MO in
@@ -293,42 +323,58 @@ Today one adjustment applies: XLF ×1.18729 on 2444 rows (2007-01-04..2016-09-16
 return on 2016-09-19 is +19.56% in `raw_prices` and +0.70% in `prices_clean`.
 
 ### `macro_asof`
-Point-in-time daily macro values on the trading calendar. **Read macro from here, never from
-`raw_macro`.** Long format, one row per `(trade_date, series_id)`. Reads `raw_macro` directly
-(documented exception, see "Data layers"). Created by `create_schema`, so calling
-`mrm.storage.clean.prepare_clean_prices(con)` first is enough before reading it.
+Point-in-time macro values on the trading calendar. **Read macro from here, never from
+`raw_macro`.** Long format, one row per `(trade_date, series_id)` for every series of
+`macro_publication_lags` (today all 9 of `config/macro.yaml`). Reads `raw_macro` directly
+(documented exception, see "Data layers"). Created by `create_schema`; its series and lags come
+from the tables synced by `mrm.storage.clean.prepare_clean_prices(con)`, so call that first
+(without a sync the view is empty). Decision: `docs/decisions/0005-macro-publication-lags.md`.
 
 | Column | Type | Description |
 |---|---|---|
 | trade_date | DATE | Trading day: every distinct `trade_date` in `prices_clean` (NYSE calendar as stored) |
-| series_id | VARCHAR | One of `MACRO_ASOF_SERIES` in `mrm.storage.schema`: DGS10, DGS2, DGS3MO, T10Y2Y |
-| value | DOUBLE | Latest non-missing `raw_macro.value` with `obs_date < trade_date`; NULL if none exists |
-| value_date | DATE | `obs_date` of the value used; NULL when `value` is NULL |
-| is_filled | BOOLEAN | `true` when the value was carried forward over a gap, i.e. `value_date` is before the previous trading day (a FRED `.` / NULL value or a missing row on that day); `false` otherwise, including when `value` is NULL |
+| series_id | VARCHAR | A series of `macro_publication_lags` |
+| value | DOUBLE | Value of the latest non-missing observation with `available_date < trade_date`; NULL if none exists |
+| value_date | DATE | `obs_date` (reference date) of the value used; NULL when `value` is NULL |
+| is_filled | BOOLEAN | `true` when the value was already available on the previous trading day (`available_date` before it), i.e. it is not new today. For the daily series (lag 0) this means a gap: a FRED `.` / NULL value or a missing row on the previous trading day. For monthly / weekly series it is `false` only on the first trading day a new release is usable. `false` when `value` is NULL |
+| available_date | DATE | Release date applied to the value: `value_date + lag_days`, or its override, as a running max over `obs_date` (see rules); NULL when `value` is NULL |
+| age_days | INTEGER | `trade_date − value_date` in calendar days: staleness of the value (grows when a release is missing); NULL when `value` is NULL |
 
 Rules:
-- **No look-ahead:** strict `obs_date < trade_date`. Daily Treasury yields are published the
-  next business day, so trading day *d* sees at most the observation of the previous day.
-  Implemented as an `ASOF LEFT JOIN` on `trade_date > obs_date`.
+- **No look-ahead:** a value is usable only on trading days strictly after its release:
+  `available_date < trade_date`, with `available_date = obs_date + lag_days` (or the override).
+  Lag 0 gives the Phase 1.6 rule `obs_date < trade_date` for DGS10, DGS2, DGS3MO and T10Y2Y,
+  whose rows are identical to Phase 1.6 (non-regression tests).
+- **Latest reference period:** `available_date` is made non-decreasing in `obs_date` (running
+  max): a delayed older release also delays newer ones, never advances them. Among values
+  available on the same date the latest `obs_date` wins. Implemented as an `ASOF LEFT JOIN` on
+  `trade_date > available_date`.
 - **Forward-fill only forward:** missing values (FRED `.`, stored as NULL, or absent rows) are
-  skipped and the latest earlier value is carried. Values are never filled backwards.
-- **Series start:** on trading days before the first observation of a series, `value` and
-  `value_date` are NULL (no backfill).
-- Observations on days the NYSE is closed (e.g. Treasury trading on a stock-market holiday)
-  are used on the next trading day; they never create rows.
+  skipped and the latest earlier value is carried; `age_days` shows how old it is. Values are
+  never filled backwards.
+- **Series start:** on trading days before the first usable value of a series, `value`,
+  `value_date`, `available_date` and `age_days` are NULL (no backfill).
+- Observations on days the NYSE is closed are used on the next trading day; they never create
+  rows.
+- **Revisions are not handled:** values are FRED's latest vintage (see "Macro look-ahead risk").
 
-**Pending (Phase 3, own ADR on publication lags):** CPIAUCSL, UNRATE, FEDFUNDS, NFCI and
-STLFSI4 are **not** in `macro_asof`. Their `obs_date` is a reference date, not the release date
-(see "Macro look-ahead risk"), so they need a per-series publication lag before they can be
-exposed.
+| Series | Lag (days) | `obs_date` | Rows today | Max `age_days` today |
+|---|---|---|---|---|
+| DGS10, DGS2, DGS3MO, T10Y2Y | 0 | trading day | 5000 each | 4 |
+| CPIAUCSL | 56 (+1 override) | 1st of the month | 5000 | 116 (2025-12-26, October 2025 never published) |
+| UNRATE | 41 (+3) | 1st of the month | 5000 | 111 (2025-11-20, 2025 shutdown) |
+| FEDFUNDS | 44 | 1st of the month | 5000 | 75 |
+| NFCI | 6 (+4) | Friday ending the week | 5000 | 27 (2023-01-05) |
+| STLFSI4 | 6 | Friday ending the week | 5000 | 13 |
 
 ## Data quality checks (`uv run mrm check`)
 
 `mrm check` first prepares the clean layer (schema plus sync of
-`config/price_adjustments.yaml`). The checks then read `prices_clean`, `raw_macro`,
+`config/price_adjustments.yaml` and `config/macro_lags.yaml`). The checks then read `prices_clean`, `raw_macro`,
 `dim_asset` and `price_adjustment_status`. They never impute or modify data: exceptions in
 the config only reclassify a finding (warning → info). An invalid
-`config/data_quality.yaml` or `config/price_adjustments.yaml` exits with code 2.
+`config/data_quality.yaml`, `config/price_adjustments.yaml` or `config/macro_lags.yaml`
+exits with code 2.
 Thresholds and exceptions: `config/data_quality.yaml`. Code: `src/mrm/quality/`.
 "Today" is the current date in New York. Exit code: `1` if any finding is critical, else `0`
 (`2` for an invalid config). `--no-save` prints the report without writing `dq_results`.
@@ -377,28 +423,26 @@ in line with the USD 4.44356 distribution.
   `price_adjustments XLF` as info instead of the extreme-return warning.
 - Derivation, sources, risks and how to revert: ADR 0003.
 
-## Macro look-ahead risk (documentation only)
+## Macro look-ahead risk
 
-`raw_macro.obs_date` is FRED's **reference** date, not the date the value became public:
+`raw_macro.obs_date` is FRED's **reference** date, not the date the value became public.
+Joining `raw_macro` to prices on `obs_date` uses information **before** it was available
+(look-ahead bias): never do it; read `macro_asof`, which applies the publication lag of each
+series (ADR 0005):
 
-| Series | `obs_date` | Typically published |
-|---|---|---|
-| CPIAUCSL | 1st of the reference month | ~2–6 weeks after the month ends (mid-month for CPI) |
-| UNRATE | 1st of the reference month | First Friday of the following month |
-| FEDFUNDS | 1st of the reference month | Early in the following month |
-| NFCI | Friday of the reference week | The following Wednesday |
-| STLFSI4 | Friday of the reference week | The following week |
-| DGS10, DGS2, DGS3MO, T10Y2Y | Trading day | Next business day |
+| Series | `obs_date` | Released (first-release lag on ALFRED since 2005) | `lag_days` |
+|---|---|---|---|
+| CPIAUCSL | 1st of the reference month | mid following month, 8:30 ET (37–59 d) | 56 |
+| UNRATE | 1st of the reference month | usually first Friday of the following month (31–80 d) | 41 |
+| FEDFUNDS | 1st of the reference month | first business days of the following month (28–44 d) | 44 |
+| NFCI | Friday ending the reference week | following Wednesday, Thursday after a holiday (5–20 d) | 6 |
+| STLFSI4 | Friday ending the reference week | following week (5–6 d) | 6 |
+| DGS10, DGS2, DGS3MO, T10Y2Y | Trading day | next business day | 0 |
 
-Joining these series to prices on `obs_date` uses information **before** it was available
-(look-ahead bias). FRED also stores only the latest vintage, so revisions are a residual
-look-ahead (`docs/methodology.md`). The publication lag applied per series is decided in the
-regime-model phase, not here.
-
-**Status:** the daily series (DGS10, DGS2, DGS3MO, T10Y2Y) are available without look-ahead in
-the `macro_asof` view (rule `obs_date < trade_date`, Phase 1.6). **Pending for Phase 3, with
-its own ADR:** publication lags for CPIAUCSL, UNRATE, FEDFUNDS, NFCI and STLFSI4. Until then
-they are not in `macro_asof` and must not be joined to prices on `obs_date`.
+Releases longer than `lag_days` are listed as overrides in `config/macro_lags.yaml`.
+**Residual look-ahead:** FRED stores only the latest vintage, so revisions are not removed
+(NFCI revisions are large: mean 0.147 against a standard deviation of 0.58), and NFCI before
+2011-06 and STLFSI4 before 2022-11 are reconstructions. See `docs/methodology.md` and ADR 0005.
 
 ## CSV exports (`data/exports/`)
 

@@ -45,8 +45,8 @@ ingest (Python) -> DuckDB warehouse -> metrics / regimes / portfolio modules -> 
 
 Repo layout:
 ```
-config/            universe.yaml, macro.yaml, data_quality.yaml, price_adjustments.yaml,
-                   portfolio.example.yaml, regimes.yaml
+config/            universe.yaml, macro.yaml, macro_lags.yaml, data_quality.yaml,
+                   price_adjustments.yaml, portfolio.example.yaml, regimes.yaml
 src/mrm/ingest/    providers, FRED client, incremental loaders
 src/mrm/storage/   duckdb schema + helpers
 src/mrm/quality/   data quality checks (`mrm check`), NYSE/federal calendar
@@ -70,8 +70,9 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 - Never commit: `.env`, API keys, `*.duckdb`, raw API dumps, notebooks with outputs holding keys.
 
 ## Data model (DuckDB)
-Tables: raw_prices, raw_macro, dim_asset, ingest_log, dq_results, price_adjustments, fact_returns,
-fact_risk_metrics, fact_correlations, fact_regime, fact_backtest_equity, fact_backtest_summary.
+Tables: raw_prices, raw_macro, dim_asset, ingest_log, dq_results, price_adjustments,
+macro_publication_lags, macro_release_overrides, fact_returns, fact_risk_metrics,
+fact_correlations, fact_regime, fact_backtest_equity, fact_backtest_summary.
 Views: price_adjustment_status, prices_clean, macro_asof.
 Every table and view documented in docs/data_dictionary.md.
 
@@ -81,16 +82,24 @@ corrections from config, no imputation) -> `*_asof` (point-in-time, publication 
 `prices_clean` (call `mrm.storage.clean.prepare_clean_prices(con)` first). Corrections go in
 `config/price_adjustments.yaml` with derivation, sources and an ADR (see ADR 0003); never edit
 `raw_prices`. Read macro from `macro_asof`: long format (trade_date, series_id, value,
-value_date, is_filled) on the `prices_clean` trading days, strict `obs_date < trade_date`,
-forward-fill only forward, NULL before a series starts. It reads `raw_macro` directly
-(documented exception: no `macro_clean`). It holds only DGS10, DGS2, DGS3MO, T10Y2Y.
+value_date, is_filled, available_date, age_days) on the `prices_clean` trading days, all 9
+series of macro.yaml. A value is used only after its release: `available_date < trade_date`,
+`available_date = obs_date + lag_days` or a documented override (`config/macro_lags.yaml`,
+ADR 0005; lag 0 for the daily Treasury series = strict `obs_date < trade_date`). Forward-fill
+only forward, NULL before a series starts. It reads `raw_macro` directly (documented
+exception: no `macro_clean`). Every series in macro.yaml needs an entry in macro_lags.yaml.
+Revisions are NOT removed (FRED latest vintage); NFCI before 2011-06 and STLFSI4 before 2022-11
+are reconstructions.
 
 ## Status
 - Phase 1.6 done: `macro_asof` for the daily Treasury series.
 - Phase 2.1 done: risk metrics (`src/mrm/metrics`) into fact_returns, fact_risk_metrics,
   fact_correlations (local only; nothing exported yet).
-- Pending for Phase 3 (own ADR on publication lags): CPIAUCSL, UNRATE, FEDFUNDS, NFCI,
-  STLFSI4 in `macro_asof`. Never join them to prices on `obs_date`.
+- Phase 3.0 done: publication lags (ADR 0005, `config/macro_lags.yaml`): CPIAUCSL 56,
+  UNRATE 41, FEDFUNDS 44, NFCI 6, STLFSI4 6 days plus 8 ALFRED-dated overrides; all 9 series
+  in `macro_asof`, the 4 daily series row-identical to Phase 1.6. Never join `raw_macro` to
+  prices on `obs_date`.
+- Next: step 3.1 regimes v1. Revisit ALFRED vintages (revision look-ahead) when planning it.
 
 ## Metric definitions (document formulas in docs/methodology.md)
 Daily log/simple returns; annualized vol (252d); rolling 60d vol; max drawdown;
@@ -100,8 +109,8 @@ correlation matrix (rolling 126d); Euler risk contribution per asset.
 ## Regimes
 v1 rules (config/regimes.yaml, thresholds explicit and tunable): yield curve (T10Y2Y),
 financial stress (NFCI; STLFSI4 as robustness check), SPY 60d realized volatility,
-unemployment trend -> Expansion / Slowdown / Stress. Apply publication lags (weekly NFCI is
-released the following Wednesday; monthly series the next month).
+unemployment trend -> Expansion / Slowdown / Stress. Apply publication lags (read from `macro_asof`,
+which applies them; see ADR 0005).
 v2: unsupervised model (GMM or HMM) and a comparison against v1. Report honestly where
 they disagree. Avoid look-ahead bias: use only information available at each date.
 
@@ -140,6 +149,8 @@ live Tableau Public link; methodology and limitations documented.
   (~1 s between series; `--dry-run` calls the API, requests full history, writes nothing)
 - `uv run mrm ingest prices|macro [...]` is an alias of the two `python -m` commands above
   (same options and exit codes)
+- clean layer: `prepare_clean_prices(con)` creates the schema and syncs config/price_adjustments.yaml
+  and config/macro_lags.yaml (run by `mrm check` and `mrm metrics`; invalid config -> exit 2)
 - data quality: `uv run mrm check [--no-save]` (thresholds in config/data_quality.yaml; prints
   the report by severity, appends to `dq_results`; exit 1 only on critical findings)
 - risk metrics: `uv run mrm metrics [--portfolio PATH] [--dry-run]` (= `python -m mrm.metrics.run`;

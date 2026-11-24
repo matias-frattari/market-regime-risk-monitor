@@ -114,12 +114,51 @@ one dated the day before does.
   are provider-adjusted (ADR 0001) with documented corrections (ADR 0003).
 
 
-## Macro data vintages (limitation)
+## Macro publication lags and vintages (ADR 0005)
 
-Macro series come from FRED, which serves only the **latest vintage** of each series.
-Revisions are applied retroactively. A backtest that reads a past date therefore sees the
-revised value, not the value that was known at the time. The full-history revisions of
-NFCI and STLFSI4 are an example. This is a residual look-ahead bias. Real-time vintages
-(ALFRED) are out of scope for v1. Publication lags (weekly indices released the following
-week, monthly series the next month) are handled in the regime module. See
-`docs/decisions/0002-macro-series-licensing.md`.
+### Publication lags
+
+`raw_macro.obs_date` is a reference date (1st of the month for monthly series, the Friday
+ending the week for weekly ones), not the release date. `macro_asof` applies a per-series lag
+from `config/macro_lags.yaml`:
+
+- `available_date = obs_date + lag_days`, or a documented override (delayed release, date from
+  ALFRED). A value is used on trading day *t* only if `available_date < t`, so never on its
+  release day (conservative by up to one day).
+- Lags: CPIAUCSL 56, UNRATE 41, FEDFUNDS 44, NFCI 6, STLFSI4 6, daily Treasury series 0
+  (= the rule `obs_date < t`). Each covers every first release on ALFRED since 2005 except
+  the 8 overrides (2013 and 2025 shutdowns for CPI/UNRATE, 4 skipped NFCI weeks).
+- On *t* the value is the latest reference period already available; `age_days =
+  t − value_date` measures its staleness (it grows when a release is missing, e.g. October 2025
+  CPI and UNRATE were never published). `is_filled` means "already available on the previous
+  trading day": a gap for the daily series, simply "not a new release today" for the others.
+- Cost of being conservative: on average values are about 12 days staler than in reality for
+  CPIAUCSL and FEDFUNDS, 6 for UNRATE and under 1 for NFCI and STLFSI4.
+
+### Vintages and revisions (limitation)
+
+FRED serves only the **latest vintage** of each series. The lag removes the look-ahead of the
+release *date*, not of *revisions*: a backtest reading a past date sees the revised value, not
+the one known at the time. Measured on 2007+ (first release on ALFRED vs. today):
+
+| Series | Revised obs | Mean abs revision | Max abs revision | Std dev |
+|---|---|---|---|---|
+| NFCI | 806 / 807 | 0.147 | 0.541 | 0.583 |
+| STLFSI4 | 207 / 209 | 0.035 | 0.445 | 1.206 |
+| CPIAUCSL (SA) | 227 / 237 | 0.19 index pts | 0.72 | 36.8 |
+| UNRATE (SA) | 112 / 237 | 0.05 pp | 0.20 pp | 2.18 |
+| FEDFUNDS | 0 / 238 | 0 | 0 | 1.90 |
+
+- **NFCI revisions are large relative to the series** (mean 0.147, max 0.54, against a standard
+  deviation of 0.58), so **thresholds on the NFCI level are fragile**: a crossing in today's
+  vintage may not have happened in real time.
+- **Reconstructed history:** NFCI before 2011-06 and STLFSI4 before 2022-11 did not exist in
+  real time (first ALFRED vintages 2011-06-02 and 2022-11-17); those values are reconstructions
+  computed later. No lag fixes this; it covers the 2008 crisis of the sample.
+- **Future delays** not yet added as overrides are shown from `obs_date + lag_days` in the
+  history until the config is updated.
+- **Alternative, not implemented:** ALFRED vintages (same API key) would give exact release
+  dates and real-time values, removing the revision look-ahead but not the reconstructed
+  history. The decision is revisited when planning step 3.1. See
+  `docs/decisions/0005-macro-publication-lags.md` and
+  `docs/decisions/0002-macro-series-licensing.md`.
