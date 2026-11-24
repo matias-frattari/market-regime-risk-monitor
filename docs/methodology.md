@@ -46,6 +46,11 @@ Constants: 252 trading days per year, confidence 95%, rolling windows 60d (volat
 
 - DGS3MO is an annual yield in percent. Daily rate: `rf_t = (1 + y_t / 100)^(1/252) − 1`, so
   252 daily rates compound back to the annual yield.
+- **Convention (approximation):** FRED quotes DGS3MO on an *investment (bond-equivalent) basis*,
+  not as an effective annual rate, and the formula above treats it as one. Each trading day
+  accrues the same rate, so weekends and holidays earn no extra interest (a Friday→Monday return
+  gets one day of rf). The difference from an exact money-market accrual is a few basis points per
+  year, negligible next to the Sharpe ratio's estimation error.
 - `y_t` is `macro_asof.value` on `trade_date = t`: the latest observation with
   `obs_date < t`, i.e. the yield known at the close of *t−1*, which is the rate for the
   return over *(t−1, t]*. No look-ahead.
@@ -74,6 +79,13 @@ Constants: 252 trading days per year, confidence 95%, rolling windows 60d (volat
 | Parametric CVaR 95% | `−(μ − σ φ(z) / 0.05)` (`φ(z)/0.05 ≈ 2.0627`) |
 | Rolling correlation 126d | Pearson correlation of each pair over the 126 returns ending at *t*; no value when either sample std ≤ 1e−12 |
 | Euler risk contribution | `Σ` = sample covariance (ddof=1) of the holdings' last 126 returns; `σ_p = √(wᵀΣw)`; `RC_i = w_i (Σw)_i / σ_p`; reported `× √252`, and `RC_i / σ_p` as a share; no value when daily `σ_p` ≤ 1e−12 |
+
+**Sharpe vs annualized return.** The Sharpe numerator is the *arithmetic* mean daily excess
+return, while `ann_return` is *geometric* (≈ arithmetic − σ²/2 per year). An asset can therefore
+show a positive Sharpe with an `ann_return` below the average risk-free rate: TLT in the current
+warehouse has `ann_return` ≈ 1.5%, average DGS3MO ≈ 1.6% and Sharpe ≈ +0.07 (arithmetic mean ≈
+2.6%). Both definitions are standard; they answer different questions (average daily reward per
+unit of risk vs compounded growth).
 
 VaR/CVaR are **one-day** losses reported as positive numbers, computed on the full history
 (rolling VaR is planned for Phase 3, per regime). By Euler's theorem for the homogeneous

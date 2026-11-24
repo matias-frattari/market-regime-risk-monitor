@@ -210,6 +210,14 @@ No row for the first day of a ticker, for a day without a quote, or for the day 
 return never spans a gap). The portfolio has no row on days where any holding lacks a return.
 
 #### `fact_risk_metrics`
+
+> ⚠️ **`window_label = 'full'` values are NOT point-in-time. Never join them by date.**
+> They are computed on the **whole history** and stamped with the last return date as
+> `as_of_date`. Joining them to `fact_regime`, a backtest or any other table on a date (or
+> filtering them "as of" an earlier date) uses future data for every date before `as_of_date`.
+> For point-in-time use, take the rolling (`60d`, `126d`) or `expanding` rows, which use only
+> data up to `as_of_date`.
+
 Tidy (long) risk metrics. PK: `(entity_id, as_of_date, metric, window_label)`.
 
 | Column | Type | Null | Description |
@@ -228,7 +236,7 @@ Tidy (long) risk metrics. PK: `(entity_id, as_of_date, metric, window_label)`.
 | ann_return | full | asset, portfolio | one row | annualized geometric return (decimal) |
 | ann_vol | full | asset, portfolio | one row | annualized volatility (decimal) |
 | max_drawdown | full | asset, portfolio | one row | most negative drawdown (≤ 0) |
-| sharpe | full | asset, portfolio | one row | annualized Sharpe ratio, rf = DGS3MO |
+| sharpe | full | asset, portfolio | one row | annualized Sharpe ratio, rf = DGS3MO; arithmetic mean excess return, so it can be > 0 while `ann_return` (geometric) is below the average rf (methodology.md) |
 | var_hist_95, cvar_hist_95 | full | asset, portfolio | one row | 1-day historical VaR/CVaR 95%, positive loss |
 | var_param_95, cvar_param_95 | full | asset, portfolio | one row | 1-day Gaussian VaR/CVaR 95%, positive loss |
 | vol_60d | 60d | asset, portfolio | daily | annualized rolling volatility |
