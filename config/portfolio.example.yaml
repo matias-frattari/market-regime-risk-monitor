@@ -1,12 +1,16 @@
-# Example portfolio configuration
-# Copy to portfolio.yaml and edit weights (must sum to 1.0)
-# Populated in Phase 3 (portfolio module).
+# Example portfolio (synthetic, educational; not a recommendation).
+# To use your own weights, copy this file to config/portfolio.yaml (gitignored) and edit it.
+# Rules checked by mrm.config.load_portfolio:
+#   - id: lowercase letters, digits, '_' or '-' (used as entity_id in fact_* tables)
+#   - every ticker must be in config/universe.yaml, no duplicates
+#   - weights >= 0 and summing to 1.0 (tolerance 1e-9); long-only, fully invested
 
-# portfolio:
-#   name: My ETF Portfolio
-#   holdings:
-#     SPY: 0.40
-#     TLT: 0.20
-#     QQQ: 0.20
-#     GLD: 0.10
-#     EFA: 0.10
+portfolio:
+  id: example
+  name: Example ETF Portfolio
+  holdings:
+    SPY: 0.40
+    TLT: 0.20
+    QQQ: 0.20
+    GLD: 0.10
+    EFA: 0.10

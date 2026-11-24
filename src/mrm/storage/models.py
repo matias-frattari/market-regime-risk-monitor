@@ -71,3 +71,12 @@ class PriceAdjustment:
     apply_if_raw_return_above: float
     derivation: str
     sources: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Portfolio:
+    """Fixed-weight, long-only portfolio. ``weights`` maps ticker -> weight (sums to 1)."""
+
+    portfolio_id: str
+    name: str
+    weights: dict[str, float]

@@ -1,5 +1,8 @@
 """Project paths and config-file loaders."""
 
+import math
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -7,13 +10,17 @@ from typing import Any
 
 import yaml
 
-from mrm.storage.models import Asset, MacroSeries, PriceAdjustment
+from mrm.storage.models import Asset, MacroSeries, Portfolio, PriceAdjustment
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 UNIVERSE_PATH: Path = REPO_ROOT / "config" / "universe.yaml"
 MACRO_PATH: Path = REPO_ROOT / "config" / "macro.yaml"
 DATA_QUALITY_PATH: Path = REPO_ROOT / "config" / "data_quality.yaml"
 PRICE_ADJUSTMENTS_PATH: Path = REPO_ROOT / "config" / "price_adjustments.yaml"
+PORTFOLIO_PATH: Path = REPO_ROOT / "config" / "portfolio.yaml"  # personal, gitignored
+PORTFOLIO_EXAMPLE_PATH: Path = REPO_ROOT / "config" / "portfolio.example.yaml"
+WEIGHT_SUM_TOLERANCE = 1e-9
+_PORTFOLIO_ID = re.compile(r"[a-z0-9_-]+")
 DEFAULT_OVERLAP_DAYS = 90
 FULL_RELOAD = "full"
 # Copyrighted on FRED (Cboe, ICE): never ingested. See docs/decisions/0002.
@@ -256,3 +263,50 @@ def load_price_adjustments(path: Path | None = None) -> list[PriceAdjustment]:
             )
         )
     return result
+
+
+def default_portfolio_path() -> Path:
+    """``config/portfolio.yaml`` if it exists, else ``config/portfolio.example.yaml``."""
+    return PORTFOLIO_PATH if PORTFOLIO_PATH.exists() else PORTFOLIO_EXAMPLE_PATH
+
+
+def load_portfolio(path: Path | None = None, universe: Sequence[str] | None = None) -> Portfolio:
+    """Load a fixed-weight portfolio (``portfolio: {id, name, holdings: {ticker: weight}}``).
+
+    ``universe`` defaults to the tickers of ``config/universe.yaml``. Raises ValueError on a
+    malformed id, a ticker outside the universe, a duplicated ticker, a negative or
+    non-numeric weight, or weights not summing to 1 (tolerance ``WEIGHT_SUM_TOLERANCE``).
+    """
+    raw = yaml.safe_load((path or default_portfolio_path()).read_text(encoding="utf-8"))
+    section = raw.get("portfolio") if isinstance(raw, dict) else None
+    if not isinstance(section, dict):
+        raise ValueError("portfolio file must hold a 'portfolio' mapping")
+
+    portfolio_id = str(section.get("id") or "").strip()
+    if not _PORTFOLIO_ID.fullmatch(portfolio_id):
+        raise ValueError("portfolio.id must use only lowercase letters, digits, '_' or '-'")
+    name = str(section.get("name") or portfolio_id).strip()
+
+    holdings = section.get("holdings")
+    if not isinstance(holdings, dict) or not holdings:
+        raise ValueError("portfolio.holdings must map ticker -> weight")
+    allowed = set(universe) if universe is not None else {a.ticker for a in load_universe()}
+
+    weights: dict[str, float] = {}
+    for key, value in holdings.items():
+        ticker = str(key).strip().upper()
+        if ticker in weights:
+            raise ValueError(f"duplicated ticker in portfolio: {ticker}")
+        if ticker not in allowed:
+            raise ValueError(f"portfolio ticker {ticker} is not in config/universe.yaml")
+        numeric = isinstance(value, int | float) and not isinstance(value, bool)
+        if not numeric or not math.isfinite(value):
+            raise ValueError(f"weight of {ticker} must be a number")
+        if value < 0:
+            raise ValueError(f"weight of {ticker} must be >= 0 (long-only)")
+        weights[ticker] = float(value)
+
+    total = math.fsum(weights.values())
+    if abs(total - 1.0) > WEIGHT_SUM_TOLERANCE:
+        raise ValueError(f"portfolio weights must sum to 1.0, got {total:.12g}")
+    return Portfolio(portfolio_id=portfolio_id, name=name, weights=weights)
