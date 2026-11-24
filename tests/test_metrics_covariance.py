@@ -120,3 +120,14 @@ def test_riskless_combination_has_no_euler_rows() -> None:
     assert result.empty
     rc, sigma = euler_contributions(np.array([[1e-30]]), np.array([1.0]))
     assert sigma == 0.0 and np.isnan(rc).all()
+
+
+def test_rolling_euler_ignores_the_future() -> None:
+    panel = _panel()
+    weights = {"A": 0.4, "C": 0.35, "D": 0.25}
+    t = panel.index[200]
+    changed = panel.copy()
+    changed.iloc[201:] = 0.3
+    before = rolling_euler_contributions(panel, weights, window=126)
+    after = rolling_euler_contributions(changed, weights, window=126)
+    assert before[before.trade_date <= t].equals(after[after.trade_date <= t])

@@ -127,3 +127,14 @@ def test_parametric_var_cvar_matches_closed_form() -> None:
 def test_var_with_no_data_is_nan() -> None:
     empty = _series([np.nan, np.nan])
     assert all(math.isnan(v) for v in historical_var_cvar(empty) + parametric_var_cvar(empty))
+
+
+def test_drawdown_ignores_the_future() -> None:
+    rng = np.random.default_rng(3)  # synthetic random walk, not market data
+    close = _series(100.0 * np.exp(np.cumsum(rng.normal(0, 0.01, 200))))
+    changed = close.copy()
+    changed.iloc[101:] = changed.iloc[101:] * 3.0  # a new peak after t = 100
+    t = slice(0, 101)
+    assert price_drawdown(changed).iloc[t].equals(price_drawdown(close).iloc[t])
+    r, r_changed = simple_returns(close.to_frame())[0], simple_returns(changed.to_frame())[0]
+    assert drawdown(r_changed).iloc[t].equals(drawdown(r).iloc[t])

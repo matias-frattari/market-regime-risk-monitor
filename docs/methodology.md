@@ -82,9 +82,12 @@ rolling volatility on each date, and the shares sum to 1.
 
 ### No look-ahead
 
-Every rolling value at *t* uses only returns dated ≤ *t* (trailing windows); tests change data
-after *t* and check that the value at *t* does not move. The risk-free rate at *t* uses only
-observations dated before *t* (`macro_asof`).
+Every rolling or expanding value at *t* uses only data dated ≤ *t* (trailing windows, running
+peak). Invariance tests change the data after *t* and check that the value at *t* does not move,
+for rolling volatility, rolling correlation, rolling Euler contributions and drawdown (price- and
+return-based). The risk-free rate at *t* uses only observations dated before *t* (`macro_asof`);
+a test checks that a DGS3MO observation dated on the last trading day changes no metric, while
+one dated the day before does.
 
 ### Limitations
 

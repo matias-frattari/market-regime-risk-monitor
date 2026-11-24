@@ -181,3 +181,19 @@ def test_compute_metrics_is_pure_and_matches_written_rows(
     assert "sharpe" not in set(result.risk_metrics.metric)  # no risk-free -> no Sharpe row
     assert result.risk_metrics.value.notna().all()
     assert len(result.returns) == 4 * (N_DAYS - 1)
+
+
+def test_risk_free_observed_on_the_last_day_is_not_used(
+    loaded: duckdb.DuckDBPyConnection,
+) -> None:
+    # macro_asof: rf at t is the latest obs strictly before t, so an observation dated on the
+    # last trading day (known only at its close) cannot affect any return up to that day.
+    query = "SELECT entity_id, value, n_obs FROM fact_risk_metrics WHERE metric = 'sharpe'"
+    main([], con=loaded, portfolio=P1, adjustments=[])
+    before = sorted(loaded.execute(query).fetchall())
+    upsert_macro(loaded, [MacroObservation("DGS3MO", DATES[-1], 50.0)])
+    main([], con=loaded, portfolio=P1, adjustments=[])
+    assert sorted(loaded.execute(query).fetchall()) == before
+    upsert_macro(loaded, [MacroObservation("DGS3MO", DATES[-2], 50.0)])  # used on DATES[-1]
+    main([], con=loaded, portfolio=P1, adjustments=[])
+    assert sorted(loaded.execute(query).fetchall()) != before
