@@ -35,6 +35,7 @@ uv run pytest
 # setup:   TBD
 # ingest:  uv run python -m mrm.ingest.prices [--tickers SPY,TLT] [--dry-run]
 # metrics: uv run mrm metrics [--portfolio PATH] [--dry-run]
+# regimes: uv run mrm regimes [--dry-run]
 # test:    uv run pytest
 # export:  TBD
 ```
@@ -44,7 +45,7 @@ uv run pytest
 ## Project layout
 
 ```
-config/            universe.yaml, portfolio.example.yaml, regimes.yaml
+config/            universe.yaml, portfolio.example.yaml, regime_rules.yaml
 src/mrm/ingest/    price providers, FRED client, incremental loaders
 src/mrm/storage/   DuckDB schema + helpers
 src/mrm/metrics/   returns, vol, drawdown, VaR/CVaR, correlations, risk contribution

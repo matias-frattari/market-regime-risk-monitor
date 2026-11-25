@@ -56,7 +56,8 @@ series `notes` field contains that word.
   Stress regimes may therefore be detected somewhat later.
 - NFCI includes credit-spread information, which partly replaces the excluded HY spread.
 - Weekly and monthly series have publication lags. The regime module must lag them so it uses
-  only values published by each date (see `config/regimes.yaml`).
+  only values published by each date (see `config/regime_rules.yaml`, renamed from
+  `config/regimes.yaml` in step 3.1; lags in ADR 0005).
 - FRED only serves the latest vintage. Revised values (including the full-history revisions
   of NFCI and STLFSI4) are a residual look-ahead bias, documented in `docs/methodology.md`.
 - Any series added to `config/macro.yaml` must first pass the same metadata check.

@@ -77,6 +77,7 @@ ingest ──► raw_*  (tables)      provider data as loaded; only the ingestio
              ▼
    metrics / regimes / portfolio / exports / data quality checks
              │                   metrics -> fact_returns, fact_risk_metrics, fact_correlations
+             │                   regimes -> fact_regimes (rules v1, ADR 0006)
              ▼                   (local only; formulas in docs/methodology.md)
    data/exports/*.csv (aggregated metrics only, Phase 5)
 ```
@@ -93,8 +94,8 @@ series, i.e. the Phase 1.6 rule; per-series lags and delayed-release overrides i
 The clean layer is prepared by `mrm.storage.clean.prepare_clean_prices(con)`. It creates the
 schema (tables and views) and syncs `config/price_adjustments.yaml` into `price_adjustments`
 and `config/macro_lags.yaml` into `macro_publication_lags` / `macro_release_overrides`.
-Call it before reading `prices_clean` or `macro_asof`; `mrm check` and `mrm metrics` do so
-first. The ingestion does not call it and is unchanged.
+Call it before reading `prices_clean` or `macro_asof`; `mrm check`, `mrm metrics` and
+`mrm regimes` do so first. The ingestion does not call it and is unchanged.
 
 **Conditional corrections.** An adjustment applies only while the raw data still shows the
 error (raw return on the ex-date above a configured threshold), evaluated inside the view on
@@ -111,7 +112,19 @@ every query. If the provider fixes its data, the correction stops applying by it
 | `run.py` | CLI: prepares the clean layer, runs the checks, appends to `dq_results` |
 
 Check rules and thresholds: `docs/data_dictionary.md`, "Data quality checks".
-`src/mrm/cli.py` dispatches `mrm ingest prices|macro` and `mrm check` to the module entry points.
+`src/mrm/cli.py` dispatches `mrm ingest prices|macro`, `mrm check`, `mrm metrics` and
+`mrm regimes` to the module entry points.
+
+## Regimes (`src/mrm/regimes/`, `uv run mrm regimes`)
+
+| Module | Role |
+|---|---|
+| `rules.py` | Pure functions: NFCI/STLFSI4 levels, backcast/revised label, curve flag, Sahm gap, `build_regimes` |
+| `io.py` | Reads NFCI, STLFSI4, T10Y2Y, UNRATE from `macro_asof` (NYSE trading days only); full rebuild of `fact_regimes` in one transaction |
+| `report.py` | Aggregates only: shares per regime and flag, changes per year, NFCI vs STLFSI4 agreement, NULLs with reasons, stale NFCI runs vs known events |
+| `run.py` | CLI: loads `config/regime_rules.yaml`, prepares the clean layer, builds, writes, prints the report |
+
+Rules, thresholds and limits: ADR 0006 and `docs/methodology.md`, "Regimes v1".
 
 ## Runtime dependencies
 

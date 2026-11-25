@@ -3,7 +3,7 @@
 ## Purpose
 Data pipeline + analytics + Tableau dashboard that answers three questions for a long-term
 investor in US-listed ETFs (Wall Street only):
-1. What macro/market regime are we in? (expansion / slowdown / stress)
+1. What macro/market regime are we in? (calm / tension / stress)
 2. How risky is my portfolio, and where does the risk come from?
 3. Would rebalancing help, and how do alternative allocation strategies behave per regime?
 
@@ -46,7 +46,7 @@ ingest (Python) -> DuckDB warehouse -> metrics / regimes / portfolio modules -> 
 Repo layout:
 ```
 config/            universe.yaml, macro.yaml, macro_lags.yaml, data_quality.yaml,
-                   price_adjustments.yaml, portfolio.example.yaml, regimes.yaml
+                   price_adjustments.yaml, portfolio.example.yaml, regime_rules.yaml
 src/mrm/ingest/    providers, FRED client, incremental loaders
 src/mrm/storage/   duckdb schema + helpers
 src/mrm/quality/   data quality checks (`mrm check`), NYSE/federal calendar
@@ -72,7 +72,7 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 ## Data model (DuckDB)
 Tables: raw_prices, raw_macro, dim_asset, ingest_log, dq_results, price_adjustments,
 macro_publication_lags, macro_release_overrides, fact_returns, fact_risk_metrics,
-fact_correlations, fact_regime, fact_backtest_equity, fact_backtest_summary.
+fact_correlations, fact_regimes, fact_backtest_equity, fact_backtest_summary.
 Views: price_adjustment_status, prices_clean, macro_asof.
 Every table and view documented in docs/data_dictionary.md.
 
@@ -99,7 +99,12 @@ are reconstructions.
   UNRATE 41, FEDFUNDS 44, NFCI 6, STLFSI4 6 days plus 8 ALFRED-dated overrides; all 9 series
   in `macro_asof`, the 4 daily series row-identical to Phase 1.6. Never join `raw_macro` to
   prices on `obs_date`.
-- Next: step 3.1 regimes v1. Revisit ALFRED vintages (revision look-ahead) when planning it.
+- Phase 3.1 done: rules-based regimes v1 (ADR 0006, `config/regime_rules.yaml`) into
+  `fact_regimes` (local only): NFCI calm < 0 <= tension < 1 <= stress, STLFSI4 robustness,
+  flags curve_inverted (T10Y2Y < 0) and unemployment_rising (Sahm >= 0.50 pp). ALFRED vintages
+  stay out of scope (revision look-ahead documented). Thresholds are a priori: never tune them
+  on results.
+- Next: step 3.2 regimes v2 (GMM/HMM) and comparison against v1.
 
 ## Metric definitions (document formulas in docs/methodology.md)
 Daily log/simple returns; annualized vol (252d); rolling 60d vol; max drawdown;
@@ -107,10 +112,11 @@ Sharpe (risk-free = DGS3MO); historical and parametric VaR/CVaR at 95%;
 correlation matrix (rolling 126d); Euler risk contribution per asset.
 
 ## Regimes
-v1 rules (config/regimes.yaml, thresholds explicit and tunable): yield curve (T10Y2Y),
-financial stress (NFCI; STLFSI4 as robustness check), SPY 60d realized volatility,
-unemployment trend -> Expansion / Slowdown / Stress. Apply publication lags (read from `macro_asof`,
-which applies them; see ADR 0005).
+v1 rules (config/regime_rules.yaml, thresholds explicit and fixed a priori, ADR 0006): NFCI
+level -> calm / tension / stress (STLFSI4 same thresholds, robustness check only), overlay
+flags curve_inverted (T10Y2Y) and unemployment_rising (UNRATE, Sahm rule). SPY realized vol is
+not used in v1. Read from `macro_asof` (applies the publication lags, ADR 0005).
+`nfci_history` marks NFCI as backcast/revised: never real time (latest FRED vintage).
 v2: unsupervised model (GMM or HMM) and a comparison against v1. Report honestly where
 they disagree. Avoid look-ahead bias: use only information available at each date.
 
@@ -122,7 +128,7 @@ in-sample bias) in methodology.md.
 
 ## Tableau exports (data/exports/)
 Small, tidy CSVs: dim_assets, fact_risk_metrics,
-fact_correlations, fact_regime, fact_backtest_equity, fact_backtest_summary.
+fact_correlations, fact_regimes, fact_backtest_equity, fact_backtest_summary.
 Never export price series or daily per-ticker returns; export only aggregated metrics and
 portfolio backtest curves (licensing of redistributed data, see docs/decisions/0001).
 Dashboard pages: 1) Macro Regime, 2) Portfolio Risk, 3) Rebalancing & Backtest.
@@ -150,7 +156,8 @@ live Tableau Public link; methodology and limitations documented.
 - `uv run mrm ingest prices|macro [...]` is an alias of the two `python -m` commands above
   (same options and exit codes)
 - clean layer: `prepare_clean_prices(con)` creates the schema and syncs config/price_adjustments.yaml
-  and config/macro_lags.yaml (run by `mrm check` and `mrm metrics`; invalid config -> exit 2)
+  and config/macro_lags.yaml (run by `mrm check`, `mrm metrics` and `mrm regimes`; invalid
+  config -> exit 2)
 - data quality: `uv run mrm check [--no-save]` (thresholds in config/data_quality.yaml; prints
   the report by severity, appends to `dq_results`; exit 1 only on critical findings)
 - risk metrics: `uv run mrm metrics [--portfolio PATH] [--dry-run]` (= `python -m mrm.metrics.run`;
@@ -159,5 +166,10 @@ live Tableau Public link; methodology and limitations documented.
   transaction; portfolio from `config/portfolio.yaml` if present, else `portfolio.example.yaml`;
   prints counts and date ranges only, plus a warning listing other portfolios whose rows are older
   than the asset rows; exit 1 no data / holding without prices, 2 config error)
+- regimes: `uv run mrm regimes [--dry-run]` (= `python -m mrm.regimes.run`; rules in
+  config/regime_rules.yaml; prepares the clean layer, reads NFCI/STLFSI4/T10Y2Y/UNRATE from
+  macro_asof on NYSE trading days, full rebuild of fact_regimes in one transaction; prints
+  aggregates only: shares per regime/flag, changes per year, NFCI vs STLFSI4 agreement, NULLs
+  with reasons, stale NFCI runs; exit 1 no data, 2 config error)
 - test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - export: TBD

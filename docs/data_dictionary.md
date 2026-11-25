@@ -243,7 +243,7 @@ return never spans a gap). The portfolio has no row on days where any holding la
 
 > ⚠️ **`window_label = 'full'` values are NOT point-in-time. Never join them by date.**
 > They are computed on the **whole history** and stamped with the last return date as
-> `as_of_date`. Joining them to `fact_regime`, a backtest or any other table on a date (or
+> `as_of_date`. Joining them to `fact_regimes`, a backtest or any other table on a date (or
 > filtering them "as of" an earlier date) uses future data for every date before `as_of_date`.
 > For point-in-time use, take the rolling (`60d`, `126d`) or `expanding` rows, which use only
 > data up to `as_of_date`.
@@ -288,6 +288,43 @@ once) and `correlation` in [−1, 1].
 | computed_at | TIMESTAMP | no | Run time (UTC) |
 
 No row when the window has a missing return for either ticker or zero dispersion (sample std ≤ 1e−12, `ZERO_DISPERSION`).
+
+### Regime table (Phase 3.1, local only)
+
+#### `fact_regimes`
+Rules-based regime v1 per trading day (ADR 0006, rules in `config/regime_rules.yaml`). Built by
+`uv run mrm regimes` (`mrm.regimes.run`) from `macro_asof` on the NYSE trading days of
+`prices_clean`. Each run is a full rebuild in one transaction. PK: `trade_date`. Every input
+column is the point-in-time value of `macro_asof` (`available_date < trade_date`).
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| trade_date | DATE | no | NYSE trading day of `prices_clean` |
+| regime | VARCHAR | yes¹ | `calm` (NFCI < 0), `tension` (0 ≤ NFCI < 1), `stress` (NFCI ≥ 1) (CHECK) |
+| nfci_value | DOUBLE | yes¹ | As-of NFCI (latest FRED vintage) |
+| nfci_value_date | DATE | yes¹ | Reference Friday of `nfci_value` |
+| nfci_available_date | DATE | yes¹ | Release date by ADR 0005 (`< trade_date`) |
+| nfci_age_days | INTEGER | yes¹ | `trade_date − nfci_value_date` |
+| nfci_history | VARCHAR | yes¹ | `backcast` if `nfci_available_date` < 2011-06-02 (NFCI first ALFRED vintage), else `revised`. **Neither is real time**: both are FRED's latest, re-estimated vintage |
+| stlfsi4_value, stlfsi4_value_date | DOUBLE, DATE | yes¹ | As-of STLFSI4 (robustness only) |
+| stlfsi4_regime | VARCHAR | yes¹ | Same thresholds on STLFSI4 (CHECK); never changes `regime` |
+| stlfsi4_history | VARCHAR | yes¹ | `backcast` if STLFSI4 `available_date` < 2022-11-17, else `revised` |
+| regime_agrees | BOOLEAN | yes¹ | `regime = stlfsi4_regime` (NULL if either is NULL) |
+| t10y2y_value, t10y2y_value_date | DOUBLE, DATE | yes¹ | As-of 10y−2y spread (pp) |
+| curve_inverted | BOOLEAN | yes¹ | `t10y2y_value < 0` |
+| unrate_value, unrate_value_date | DOUBLE, DATE | yes¹ | As-of unemployment rate and its reference month |
+| sahm_gap | DOUBLE | yes² | 3-month average of UNRATE minus its minimum over the previous 12 months (pp) |
+| unemployment_rising | BOOLEAN | yes² | `sahm_gap ≥ 0.50` (1e−9 float tolerance) |
+| computed_at | TIMESTAMP | no | Run time (UTC) |
+
+¹ NULL only before the series has an as-of value. That is 0 days in the current warehouse, and
+`mrm regimes` counts and explains any NULL.
+² NULL during the Sahm warm-up, 2007-01-11..2007-12-12 (233 days): only months visible in
+`macro_asof` are used. A month never published (October 2025) is bridged by the 2-of-3 rule and
+creates no NULL.
+
+**Not exported yet.** The planned Tableau mart (Phase 5) is a daily regime label and flags
+derived from public FRED series. Its exact columns are decided then.
 
 ## Warehouse views
 

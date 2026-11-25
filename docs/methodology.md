@@ -159,6 +159,77 @@ the one known at the time. Measured on 2007+ (first release on ALFRED vs. today)
   history until the config is updated.
 - **Alternative, not implemented:** ALFRED vintages (same API key) would give exact release
   dates and real-time values, removing the revision look-ahead but not the reconstructed
-  history. The decision is revisited when planning step 3.1. See
+  history. Step 3.1 kept it out of scope (ADR 0006). See
   `docs/decisions/0005-macro-publication-lags.md` and
   `docs/decisions/0002-macro-series-licensing.md`.
+
+
+## Regimes v1, rules-based (ADR 0006)
+
+Rules and thresholds: `config/regime_rules.yaml`. They were fixed before any result was seen and
+come from the index definitions, never from returns or backtests. Inputs are the point-in-time
+values of `macro_asof` on each NYSE trading day (`available_date < trade_date`, ADR 0005).
+
+### Rules
+
+| Output | Rule |
+|---|---|
+| `regime` | NFCI < 0 → `calm`; 0 ≤ NFCI < 1 → `tension`; NFCI ≥ 1 → `stress`. NFCI has mean 0 and standard deviation 1 since 1971, and positive means tighter than average |
+| `stlfsi4_regime` | Same thresholds on STLFSI4 (0 = normal stress). Robustness check only: it never changes `regime` |
+| `curve_inverted` | T10Y2Y < 0 |
+| `unemployment_rising` | Sahm rule: `gap_m = MA3_m − min(MA3_{m−12..m−1}) ≥ 0.50` pp |
+
+Sahm details:
+- `MA3` is the mean of the last 3 calendar months of UNRATE and needs at least 2 of them. The
+  minimum needs at least 11 of the 12 prior averages.
+- The monthly series is rebuilt from the `(value_date, value)` pairs that `macro_asof` exposes,
+  so `gap_m` uses only months published by the time month *m* is published.
+- Each trading day takes the gap of its current reference month.
+- October 2025 was never published: its month stays NaN and the 2-of-3 rule bridges it.
+
+No smoothing or hysteresis. Flags are overlays and never change the regime. SPY realized
+volatility is not used in v1.
+
+### NFCI is re-estimated, not real time
+
+`nfci_history` (and `stlfsi4_history`) is `backcast` when the value's `available_date` is before
+the index's first ALFRED vintage (NFCI 2011-06-02, STLFSI4 2022-11-17), and `revised` otherwise.
+**Both are FRED's latest vintage.** NFCI re-estimates its whole history every week, and its
+revisions are large next to the thresholds: mean absolute revision 0.147 and max 0.54, against
+a standard deviation of 0.58 since 2007. A label near 0 or 1 may differ from the one that would
+have been computed in real time. ALFRED vintages would fix the revisions but not the backcast.
+They are out of scope for v1.
+
+### Lags
+
+The regime switches on the trading day after the NFCI release (reference Friday + 6 days, ADR
+0005), not on the reference Friday. The Sahm flag reacts about six weeks after its reference
+month (lag 41, plus the 3-month average). The lags are conservative by up to one day.
+
+### No look-ahead (tests)
+
+`tests/test_regimes_lookahead.py` checks two things:
+1. An NFCI spike changes the regime only from the first trading day after `obs_date + lag`, with
+   the lag read from `config/macro_lags.yaml`.
+2. For several cutoffs D, the rows with `trade_date ≤ D` are identical when every release
+   available on or after D is dropped or altered.
+
+`tests/test_regimes_real.py` checks the real warehouse (skipped in CI):
+- one row per `prices_clean` day
+- NULLs only in the Sahm warm-up
+- inputs equal to `macro_asof`
+- `nfci_available_date < trade_date`
+
+### Limitations
+
+- **Revisions and backcast:** see above. Every `stress` day (2008–09) is a backcast.
+- **Mostly calm by construction:** 87.8% of days are `calm` in the first run, and every year
+  2010–2019 and 2021–2026 is entirely `calm`. This is a property of the NFCI definition (0 = the
+  1971+ average), reported as is, not a reason to retune.
+- **Few changes:** 6 regime changes since 2007. A single-index rule is a transparent baseline,
+  not a model of the cycle (v2: GMM/HMM).
+- **STLFSI4 agreement** is 73.7% on all days and 96.8% when STLFSI4 is real time. In every
+  disagreement STLFSI4 is the higher level. The same thresholds mean different things on
+  the two indices, so agreement is a robustness indicator, not a validation.
+- **Sahm warm-up:** `sahm_gap` is NULL until 2007-12-12, so the flag misses the start of the
+  2007-08 crisis (stress from August 2007, NBER peak December 2007).
