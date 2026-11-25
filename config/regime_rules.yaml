@@ -1,0 +1,62 @@
+# Rules-based market regimes, v1. See docs/decisions/0006-rules-based-regimes-v1.md.
+#
+# Thresholds were fixed BEFORE looking at any result and come from how each index is
+# defined, not from our data. They must never be tuned on returns or backtest performance.
+# A change needs a new ADR.
+#
+# Every input is the point-in-time value of macro_asof (publication lags of
+# config/macro_lags.yaml, ADR 0005); nothing reads raw_macro. VIXCLS and BAMLH0A0HYM2 are
+# rejected (copyrighted, ADR 0002). SPY realized volatility is not used in v1.
+
+# Regime: three levels of the primary signal (as-of value on each trading day).
+#   value <  tension_at              -> calm
+#   tension_at <= value < stress_at  -> tension
+#   value >= stress_at               -> stress
+# NFCI is scaled to mean 0 and standard deviation 1 over its history; positive values mean
+# financial conditions tighter than average (Chicago Fed). 0 = average, 1 = one standard
+# deviation tighter than average.
+regime:
+  signal: NFCI
+  tension_at: 0.0
+  stress_at: 1.0
+
+# Robustness check only: the same thresholds applied to STLFSI4 (0 = normal stress level,
+# St. Louis Fed). It never changes the regime; `mrm regimes` reports how often both agree.
+robustness:
+  signal: STLFSI4
+  tension_at: 0.0
+  stress_at: 1.0
+
+# Overlay flags: shown next to the regime, never change it.
+flags:
+  curve_inverted:          # T10Y2Y < below (10y - 2y Treasury spread, percentage points)
+    signal: T10Y2Y
+    below: 0.0
+  unemployment_rising:     # Sahm rule (Sahm 2019): 3-month average of the unemployment rate
+    signal: UNRATE         # minus its minimum over the previous 12 months >= threshold_pp
+    ma_months: 3
+    ma_min_obs: 2          # a 3-month average needs 2 of its 3 months (Oct-2025 was never published)
+    lookback_months: 12
+    lookback_min_obs: 11   # the 12-month minimum needs 11 of its 12 monthly averages
+    threshold_pp: 0.50
+
+# First ALFRED vintage = first real-time publication of each index. A value whose
+# available_date (macro_asof) is before first_vintage is labelled `backcast` (it did not exist
+# in real time); later values are `revised` (published in real time, but stored at FRED's
+# latest vintage, i.e. re-estimated). Neither is the real-time value.
+vintages:
+  NFCI:
+    first_vintage: 2011-06-02
+    source: "ALFRED first vintage; docs/decisions/0005-macro-publication-lags.md (Limitations 2) and docs/methodology.md (Vintages and revisions)"
+  STLFSI4:
+    first_vintage: 2022-11-17
+    source: "ALFRED first vintage; docs/decisions/0005-macro-publication-lags.md (Limitations 2) and docs/methodology.md (Vintages and revisions)"
+
+# Report only (`mrm regimes`); nothing here changes fact_regimes.
+report:
+  nfci_stale_days: 14      # list runs of trading days with nfci_age_days above this
+  known_events:            # stale runs are labelled with any event they overlap
+    - name: "2025 federal shutdown"
+      start: 2025-10-01
+      end: 2025-11-12
+      source: "config/macro_lags.yaml (UNRATE override 2025-09-01); ADR 0005"

@@ -12,11 +12,15 @@ import yaml
 
 from mrm.storage.models import (
     Asset,
+    KnownEvent,
+    LevelRule,
     MacroLag,
     MacroSeries,
     Portfolio,
     PriceAdjustment,
+    RegimeRules,
     ReleaseOverride,
+    SahmRule,
 )
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -25,6 +29,7 @@ MACRO_PATH: Path = REPO_ROOT / "config" / "macro.yaml"
 DATA_QUALITY_PATH: Path = REPO_ROOT / "config" / "data_quality.yaml"
 PRICE_ADJUSTMENTS_PATH: Path = REPO_ROOT / "config" / "price_adjustments.yaml"
 MACRO_LAGS_PATH: Path = REPO_ROOT / "config" / "macro_lags.yaml"
+REGIME_RULES_PATH: Path = REPO_ROOT / "config" / "regime_rules.yaml"
 PORTFOLIO_PATH: Path = REPO_ROOT / "config" / "portfolio.yaml"  # personal, gitignored
 PORTFOLIO_EXAMPLE_PATH: Path = REPO_ROOT / "config" / "portfolio.example.yaml"
 WEIGHT_SUM_TOLERANCE = 1e-9
@@ -133,7 +138,7 @@ class DataQualityConfig:
 def _section(raw: dict[str, Any], key: str) -> dict[str, Any]:
     value = raw.get(key)
     if not isinstance(value, dict):
-        raise ValueError(f"data quality config needs a '{key}' mapping")
+        raise ValueError(f"config needs a '{key}' mapping")
     return value
 
 
@@ -357,6 +362,115 @@ def load_macro_lags(
     if extra := sorted(configured - expected):
         raise ValueError(f"publication lag for unknown macro series: {', '.join(extra)}")
     return result
+
+
+# fact_regimes names its columns after these series, so the config cannot swap them.
+REGIME_SIGNALS: dict[str, str] = {
+    "regime": "NFCI",
+    "robustness": "STLFSI4",
+    "curve_inverted": "T10Y2Y",
+    "unemployment_rising": "UNRATE",
+}
+
+
+def _number(value: object, where: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"{where} must be a finite number")
+    return float(value)
+
+
+def _signal(section: dict[str, Any], role: str, known: set[str]) -> str:
+    signal = str(section.get("signal") or "").strip().upper()
+    if signal in BLOCKED_SERIES:
+        raise ValueError(f"series {signal} is copyrighted and must not be used")
+    if signal not in known:
+        raise ValueError(f"{role}.signal {signal or '(missing)'} is not in config/macro_lags.yaml")
+    if signal != REGIME_SIGNALS[role]:
+        raise ValueError(
+            f"{role}.signal must be {REGIME_SIGNALS[role]} (fact_regimes columns are named "
+            "after it; changing it needs a schema change and an ADR)"
+        )
+    return signal
+
+
+def _level_rule(raw: dict[str, Any], role: str, known: set[str]) -> LevelRule:
+    section = _section(raw, role)
+    signal = _signal(section, role, known)
+    tension_at = _number(section.get("tension_at"), f"{role}.tension_at")
+    stress_at = _number(section.get("stress_at"), f"{role}.stress_at")
+    if not stress_at > tension_at:
+        raise ValueError(f"{role}.stress_at must be greater than {role}.tension_at")
+    vintage = _section(_section(raw, "vintages"), signal)
+    return LevelRule(
+        signal=signal,
+        tension_at=tension_at,
+        stress_at=stress_at,
+        first_vintage=_date(vintage.get("first_vintage"), f"vintages.{signal}.first_vintage"),
+        vintage_source=_text(vintage, "source", f"vintages.{signal}"),
+    )
+
+
+def _sahm_rule(flags: dict[str, Any], known: set[str]) -> SahmRule:
+    section = _section(flags, "unemployment_rising")
+    where = "flags.unemployment_rising"
+    ma_months = _int(section.get("ma_months"), f"{where}.ma_months", 1)
+    lookback = _int(section.get("lookback_months"), f"{where}.lookback_months", 1)
+    ma_min = _int(section.get("ma_min_obs"), f"{where}.ma_min_obs", 1)
+    lookback_min = _int(section.get("lookback_min_obs"), f"{where}.lookback_min_obs", 1)
+    if ma_min > ma_months or lookback_min > lookback:
+        raise ValueError(f"{where}: a *_min_obs cannot exceed its window")
+    return SahmRule(
+        signal=_signal(section, "unemployment_rising", known),
+        ma_months=ma_months,
+        ma_min_obs=ma_min,
+        lookback_months=lookback,
+        lookback_min_obs=lookback_min,
+        threshold_pp=_positive_number(section.get("threshold_pp"), f"{where}.threshold_pp"),
+    )
+
+
+def _known_events(report: dict[str, Any]) -> tuple[KnownEvent, ...]:
+    events: list[KnownEvent] = []
+    for entry in _entries(report, "known_events"):
+        name = _text(entry, "name", "known event")
+        start = _date(entry.get("start"), f"known event {name}.start")
+        end = _date(entry.get("end"), f"known event {name}.end")
+        if end < start:
+            raise ValueError(f"known event {name} ends before it starts")
+        events.append(KnownEvent(name, start, end, _text(entry, "source", f"known event {name}")))
+    return tuple(events)
+
+
+def load_regime_rules(
+    path: Path | None = None, series_ids: Sequence[str] | None = None
+) -> RegimeRules:
+    """Load ``config/regime_rules.yaml`` (see docs/decisions/0006-rules-based-regimes-v1.md).
+
+    ``series_ids`` (default: the series of ``config/macro_lags.yaml``) are the signals that
+    can be used. Raises ValueError on a malformed file, a blocked or unknown signal, a signal
+    other than the one fact_regimes is named after, ``stress_at <= tension_at``, or a missing
+    vintage.
+    """
+    raw = yaml.safe_load((path or REGIME_RULES_PATH).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("regime rules file must be a mapping")
+    known = (
+        {lag.series_id for lag in load_macro_lags()}
+        if series_ids is None
+        else {s.upper() for s in series_ids}
+    )
+    flags = _section(raw, "flags")
+    curve = _section(flags, "curve_inverted")
+    report = _section(raw, "report")
+    return RegimeRules(
+        regime=_level_rule(raw, "regime", known),
+        robustness=_level_rule(raw, "robustness", known),
+        curve_signal=_signal(curve, "curve_inverted", known),
+        curve_below=_number(curve.get("below"), "flags.curve_inverted.below"),
+        sahm=_sahm_rule(flags, known),
+        nfci_stale_days=_int(report.get("nfci_stale_days"), "report.nfci_stale_days", 1),
+        known_events=_known_events(report),
+    )
 
 
 def default_portfolio_path() -> Path:

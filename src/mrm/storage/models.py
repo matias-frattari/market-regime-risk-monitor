@@ -106,3 +106,55 @@ class MacroLag:
     lag_days: int
     source: str
     overrides: tuple[ReleaseOverride, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LevelRule:
+    """Three-level classification of a stress index (``config/regime_rules.yaml``).
+
+    ``value < tension_at`` -> calm, ``tension_at <= value < stress_at`` -> tension,
+    ``value >= stress_at`` -> stress. A value whose ``available_date`` is before
+    ``first_vintage`` is a backcast (the index did not exist in real time).
+    """
+
+    signal: str
+    tension_at: float
+    stress_at: float
+    first_vintage: date
+    vintage_source: str
+
+
+@dataclass(frozen=True, slots=True)
+class SahmRule:
+    """Sahm-rule flag: ``ma_months`` average minus its minimum over the previous
+    ``lookback_months`` monthly averages, flagged when ``>= threshold_pp``."""
+
+    signal: str
+    ma_months: int
+    ma_min_obs: int
+    lookback_months: int
+    lookback_min_obs: int
+    threshold_pp: float
+
+
+@dataclass(frozen=True, slots=True)
+class KnownEvent:
+    """Dated event used only to label report lines (e.g. stale NFCI runs)."""
+
+    name: str
+    start: date
+    end: date
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class RegimeRules:
+    """Rules of the v1 regime classification (``config/regime_rules.yaml``, ADR 0006)."""
+
+    regime: LevelRule
+    robustness: LevelRule
+    curve_signal: str
+    curve_below: float
+    sahm: SahmRule
+    nfci_stale_days: int
+    known_events: tuple[KnownEvent, ...] = ()
