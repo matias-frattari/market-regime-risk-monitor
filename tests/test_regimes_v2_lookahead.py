@@ -1,12 +1,15 @@
 # SYNTHETIC — not real market data (see tests/regimes_v2_synthetic.py).
 """Non-regression: the point-in-time regimes v2 never use information after each trading day."""
 
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from mrm.regimes.features import expanding_zscore
 from mrm.regimes.hmm import forward_filter, smoothed
+from mrm.regimes.io import read_regimes_v2, write_regimes_v2
 from mrm.regimes.v2 import (
     FULL_SAMPLE,
     POINT_IN_TIME,
@@ -17,6 +20,8 @@ from mrm.regimes.v2 import (
     build_regimes_v2,
     refit_positions,
 )
+from mrm.storage.db import connect
+from mrm.storage.schema import create_schema
 from tests.regimes_v2_synthetic import SMALL_CFG, synthetic_features
 
 FEATURES = synthetic_features()
@@ -150,3 +155,21 @@ def test_no_fit_when_history_is_too_short() -> None:
     short = FEATURES.iloc[: SMALL_CFG.point_in_time_warmup]
     frame, refits, _ = build_point_in_time(short, SMALL_CFG)
     assert refits == [] and frame["regime"].isna().all()
+
+
+def test_write_and_read_round_trip() -> None:
+    result = build_regimes_v2(FEATURES, SMALL_CFG)
+    con = connect(":memory:")
+    try:
+        create_schema(con)
+        write_regimes_v2(con, result.frame, datetime(2026, 1, 1))
+        write_regimes_v2(con, result.frame, datetime(2026, 1, 2))  # full rebuild, no duplicates
+        back = read_regimes_v2(con)
+    finally:
+        con.close()
+    assert len(back) == len(result.frame)
+    np.testing.assert_array_equal(
+        back[list(PROB_COLUMNS)].to_numpy(), result.frame[list(PROB_COLUMNS)].to_numpy()
+    )
+    assert (back["regime"].isna() == result.frame["regime"].isna()).all()
+    assert back["train_rows"].isna().sum() == result.frame["train_rows"].isna().sum()

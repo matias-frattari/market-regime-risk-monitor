@@ -253,3 +253,28 @@ def test_fact_regimes_one_row_per_day_and_checked_labels(con: duckdb.DuckDBPyCon
     # NULL regime is allowed (no as-of NFCI yet) and counted by the report.
     con.execute("INSERT INTO fact_regimes (trade_date, computed_at) VALUES ('2024-01-05', now())")
     assert con.execute("SELECT count(*) FROM fact_regimes").fetchone()[0] == 2
+
+
+# --- fact_regimes_v2 --------------------------------------------------------------------
+
+
+def test_fact_regimes_v2_one_row_per_day_and_variant(con: duckdb.DuckDBPyConnection) -> None:
+    insert = (
+        "INSERT INTO fact_regimes_v2 (trade_date, variant, is_point_in_time, regime, p_calm, "
+        "computed_at) VALUES (?, ?, ?, ?, ?, now())"
+    )
+    con.execute(insert, ["2024-01-02", "point_in_time", True, "calm", 0.9])
+    con.execute(insert, ["2024-01-02", "full_sample", False, "tension", 0.2])
+    with pytest.raises(duckdb.ConstraintException):  # one row per day per variant
+        con.execute(insert, ["2024-01-02", "point_in_time", True, "stress", 0.1])
+    with pytest.raises(duckdb.ConstraintException):  # full sample is never point-in-time
+        con.execute(insert, ["2024-01-03", "full_sample", True, "calm", 0.9])
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(insert, ["2024-01-03", "smoothed", False, "calm", 0.9])
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(insert, ["2024-01-03", "point_in_time", True, "expansion", 0.9])
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(insert, ["2024-01-03", "point_in_time", True, "calm", 1.5])
+    # warm-up row: no label, no probabilities
+    con.execute(insert, ["2024-01-04", "point_in_time", True, None, None])
+    assert con.execute("SELECT count(*) FROM fact_regimes_v2").fetchone()[0] == 3

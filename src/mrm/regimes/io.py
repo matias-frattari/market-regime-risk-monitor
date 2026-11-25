@@ -13,6 +13,7 @@ import pandas as pd
 
 from mrm.quality.calendar import is_nyse_business_day
 from mrm.regimes.rules import COLUMNS
+from mrm.regimes.v2 import COLUMNS_V2
 
 INPUT_COLUMNS: tuple[str, ...] = ("value", "value_date", "available_date", "age_days")
 
@@ -87,3 +88,35 @@ def write_regimes(
 def read_regimes(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """``fact_regimes`` ordered by trade_date (columns ``COLUMNS``, no computed_at)."""
     return con.execute(f"SELECT {', '.join(COLUMNS)} FROM fact_regimes ORDER BY trade_date").df()
+
+
+def write_regimes_v2(
+    con: duckdb.DuckDBPyConnection, frame: pd.DataFrame, computed_at: datetime
+) -> None:
+    """Replace every row of ``fact_regimes_v2`` in one transaction (full rebuild)."""
+    con.register("new_regimes_v2", frame[list(COLUMNS_V2)])
+    columns = ", ".join(COLUMNS_V2)
+    casts = {"trade_date": "DATE", "train_end_date": "DATE", "train_rows": "INTEGER"}
+    select = ", ".join(f"CAST({c} AS {casts[c]})" if c in casts else c for c in COLUMNS_V2)
+    con.execute("BEGIN TRANSACTION")
+    try:
+        con.execute("DELETE FROM fact_regimes_v2")
+        con.execute(
+            f"INSERT INTO fact_regimes_v2 ({columns}, computed_at) "
+            f"SELECT {select}, ? FROM new_regimes_v2",
+            [computed_at],
+        )
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.unregister("new_regimes_v2")
+
+
+def read_regimes_v2(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """``fact_regimes_v2`` ordered by variant (point_in_time first) and trade_date."""
+    return con.execute(
+        f"SELECT {', '.join(COLUMNS_V2)} FROM fact_regimes_v2 "
+        "ORDER BY variant = 'full_sample', trade_date"
+    ).df()

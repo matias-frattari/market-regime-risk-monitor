@@ -20,6 +20,7 @@ TABLES: tuple[str, ...] = (
     "fact_risk_metrics",
     "fact_correlations",
     "fact_regimes",
+    "fact_regimes_v2",
 )
 VIEWS: tuple[str, ...] = ("price_adjustment_status", "prices_clean", "macro_asof")
 
@@ -181,6 +182,34 @@ DDL: tuple[str, ...] = (
         sahm_gap            DOUBLE,
         unemployment_rising BOOLEAN,
         computed_at         TIMESTAMP NOT NULL  -- UTC
+    )
+    """,
+    # HMM regimes v2 (Phase 3.2, ADR 0007), rebuilt by mrm.regimes.run_v2: one row per trading
+    # day per variant. 'point_in_time' = official (expanding z-scores, yearly refits on rows
+    # before each refit, filtered probabilities); 'full_sample' = descriptive, smoothed, uses
+    # the whole sample (is_point_in_time = false: never for performance or backtests). Row t is
+    # known at the close of t: consumers act on it from t + 1. Model columns are NULL only in
+    # the warm-up (window + zscore_min_obs - 1 + min_train_days rows for point_in_time).
+    """
+    CREATE TABLE IF NOT EXISTS fact_regimes_v2 (
+        trade_date       DATE      NOT NULL,
+        variant          VARCHAR   NOT NULL CHECK (variant IN ('point_in_time', 'full_sample')),
+        is_point_in_time BOOLEAN   NOT NULL,
+        regime           VARCHAR   CHECK (regime IN ('calm', 'tension', 'stress')),
+        p_calm           DOUBLE    CHECK (p_calm BETWEEN 0 AND 1),
+        p_tension        DOUBLE    CHECK (p_tension BETWEEN 0 AND 1),
+        p_stress         DOUBLE    CHECK (p_stress BETWEEN 0 AND 1),
+        spy_vol_60d      DOUBLE,
+        nfci_value       DOUBLE,
+        t10y2y_value     DOUBLE,
+        z_spy_vol        DOUBLE,
+        z_nfci           DOUBLE,
+        z_t10y2y         DOUBLE,
+        train_end_date   DATE,
+        train_rows       INTEGER,
+        computed_at      TIMESTAMP NOT NULL,  -- UTC
+        PRIMARY KEY (trade_date, variant),
+        CHECK (is_point_in_time = (variant = 'point_in_time'))
     )
     """,
     # Raw simple return on each ex_date vs the previous stored trading day of the ticker.
