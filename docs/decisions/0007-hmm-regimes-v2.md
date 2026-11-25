@@ -160,6 +160,58 @@ table.
   `mrm.regimes.hmm`, so the official version does not depend on hmmlearn's smoothed
   `predict_proba`.
 
+## First run
+
+Run on 2026-11-25 on 5,000 trading days (2007-01-11..2026-11-24), with no missing SPY closes,
+using `config/regime_model.yaml` unchanged from the version committed with this ADR. It took
+about 10 s. An in-memory rebuild matched the stored `fact_regimes_v2` bit for bit. **Nothing in
+the config was changed after seeing these numbers.**
+
+- **NULLs.**
+  - `point_in_time`: 875 days, 2007-01-11..2010-07-01. This is exactly
+    `window + (zscore_min_obs − 1) + min_train_days = 60 + 59 + 756`.
+  - `full_sample`: 60 days, 2007-01-11..2007-04-09.
+  - No point-in-time row after the first fit has a missing feature (0 prediction-only steps).
+- **Fits.**
+  - 17 point-in-time fits, from 2010-07-02 (756 training rows) to 2026-07-16 (4,788 rows). All
+    converged in 12–43 EM iterations, well under the 200 maximum.
+  - The full-sample fit used 4,940 rows and 18 iterations.
+- **Shares.** Point-in-time, 4,125 labelled days 2010-07-02..2026-11-24: calm 29.04%, tension
+  61.50%, stress 9.45%. On the same days v1 is calm 99.05%, tension 0.95%, stress 0%. Full
+  sample, 4,940 days: calm 25.36%, tension 50.28%, stress 24.35%.
+- **The point-in-time `tension` state is not a volatility state.** Mean SPY 60-day volatility is
+  13.6% in `calm`, 13.8% in `tension` and 28.4% in `stress`. `calm` and `tension` differ mainly
+  in the yield curve (mean T10Y2Y 1.99 vs 0.57 pp), much less in NFCI (−0.57 vs −0.49). In this
+  run, point-in-time `tension` therefore reads as "normal volatility, flat curve", not as
+  intermediate stress. The label follows the a-priori ordering convention and is reported as
+  is, not renamed or retuned.
+- **Episodes and changes.**
+  - Point-in-time: 14 episodes with a mean length of 294.6 trading days; v1 has 7, full sample 19.
+  - Regime changes: v1 6, point-in-time 13, full sample 18.
+  - **3 of the 13 point-in-time changes fall on a refit day** (2015-07-07, 2020-07-08,
+    2023-07-11). The 3 point-in-time `stress` episodes are 2020-03-13..2020-07-07,
+    2022-05-11..2023-07-10 and 2025-05-13..2025-06-09, so two of them end on a refit day. This
+    is the parameter discontinuity of Limitation 3, not a change in the data.
+- **v1 vs v2.**
+  - v1 × point-in-time: agreement 29.04% (1,198 of 4,125 days). The v1 `calm` days split into
+    1,198 calm, 2,537 tension and 351 stress. The 39 v1 `tension` days are all point-in-time
+    `stress`.
+  - v1 × full sample: 28.97% of 4,940 days. All 178 v1 `stress` days and all 431 v1 `tension`
+    days are full-sample `stress`.
+  - Point-in-time × full sample: 82.62%.
+  - Per year, v1 and point-in-time agree on every day in 2010, 2013 and 2014. They agree on no
+    day in 2016–2020 or 2022–2026: v1 is `calm` throughout those years, while point-in-time is
+    `tension` (flat curve) or `stress`.
+- **Dated windows** (descriptive; tension / stress days):
+  - GFC, 397 days: v1 219 / 178; point-in-time all NULL (warm-up); full sample 0 / 397.
+  - COVID, 62 days: v1 29 / 0; point-in-time 28 / 34; full sample 24 / 38.
+  - 2022, 251 days: v1 0 / 0; point-in-time 89 / 162; full sample 92 / 159.
+  - March 2023, 23 days: v1 0 / 0; point-in-time 0 / 23; full sample 23 / 0.
+
+  v2 marks 2022 and March 2023, which v1 labels entirely `calm`. With SPY volatility and the
+  curve as inputs, this is partly by construction (see Circularity), and it is no evidence that
+  either model is "right" (Limitation 1).
+
 ## Alternatives considered
 
 - **GMM** (scikit-learn): it has no temporal persistence, so it would flip more and has no
