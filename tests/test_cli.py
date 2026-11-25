@@ -32,6 +32,8 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, list[str]]]:
         (["metrics", "--dry-run"], "mrm.metrics.run", ["--dry-run"]),
         (["regimes"], "mrm.regimes.run", []),
         (["regimes", "--dry-run"], "mrm.regimes.run", ["--dry-run"]),
+        (["regimes-v2"], "mrm.regimes.run_v2", []),
+        (["regimes-v2", "--dry-run"], "mrm.regimes.run_v2", ["--dry-run"]),
     ],
 )  # fmt: skip
 def test_dispatches_to_module_main(

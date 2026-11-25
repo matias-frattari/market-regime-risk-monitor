@@ -5,6 +5,7 @@
     uv run mrm check         [--no-save]                       (= python -m mrm.quality.run)
     uv run mrm metrics       [--portfolio PATH] [--dry-run]    (= python -m mrm.metrics.run)
     uv run mrm regimes       [--dry-run]                       (= python -m mrm.regimes.run)
+    uv run mrm regimes-v2    [--dry-run]                       (= python -m mrm.regimes.run_v2)
 
 Each subcommand forwards its remaining arguments unchanged; options and exit codes are the
 ones of the target module. Imports are lazy so ``mrm check`` does not load the HTTP clients.
@@ -20,9 +21,11 @@ COMMANDS: dict[tuple[str, ...], str] = {
     ("check",): "mrm.quality.run",
     ("metrics",): "mrm.metrics.run",
     ("regimes",): "mrm.regimes.run",
+    ("regimes-v2",): "mrm.regimes.run_v2",
 }
 USAGE = (
-    "usage: mrm {ingest prices | ingest macro | check | metrics | regimes} [options]"
+    "usage: mrm {ingest prices | ingest macro | check | metrics | regimes | regimes-v2} "
+    "[options]"
     "  (add --help for options)"
 )
 
