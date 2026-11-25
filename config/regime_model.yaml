@@ -1,0 +1,50 @@
+# Unsupervised market regimes, v2. See docs/decisions/0007-hmm-regimes-v2.md.
+#
+# Every value below was fixed BEFORE the model was run on the warehouse. None may be tuned on
+# returns, backtest performance or the v1/v2 comparison report. A change needs a new ADR.
+#
+# Inputs are point-in-time: macro features come from macro_asof (publication lags, ADR 0005),
+# SPY volatility from prices_clean. VIXCLS and BAMLH0A0HYM2 are rejected (ADR 0002).
+
+model:
+  type: gaussian_hmm        # hmmlearn.hmm.GaussianHMM, fitted by EM
+  n_states: 3               # calm / tension / stress (fact_regimes_v2 has one column per state)
+  covariance_type: diag
+  n_init: 10                # EM restarts per fit, seeds seed + 0 .. seed + n_init - 1
+  seed: 0
+  max_iter: 200
+  tol: 1.0e-4
+  order_states_by: spy_vol_60d   # after every fit: lowest mean = calm, highest = stress
+
+features:
+  spy_vol:                  # annualised rolling volatility of daily simple returns
+    ticker: SPY             # (mrm.metrics.risk.rolling_volatility)
+    window: 60              # fact_regimes_v2.spy_vol_60d is named after it
+  macro: [NFCI, T10Y2Y]     # as-of values from macro_asof
+  standardization: expanding
+  zscore_min_obs: 60        # expanding z-score is NaN until a feature has this many values
+
+point_in_time:
+  min_train_days: 756       # valid rows (all z-scores known) before the first fit
+  refit_every_days: 252     # trading days between refits
+
+# Report only (`mrm regimes-v2`): dated windows used to DESCRIBE tension/stress days. They are
+# not targets and never feed back into the model.
+report:
+  windows:
+    - name: GFC
+      start: 2007-12-01
+      end: 2009-06-30
+      source: "NBER Business Cycle Dating Committee: peak December 2007 (announced 2008-12-01), trough June 2009 (announced 2010-09-20)"
+    - name: COVID
+      start: 2020-02-01
+      end: 2020-04-30
+      source: "NBER Business Cycle Dating Committee: peak February 2020 (announced 2020-06-08), trough April 2020 (announced 2021-07-19)"
+    - name: "2022 rate shock"
+      start: 2022-01-01
+      end: 2022-12-31
+      source: "Calendar year 2022: FOMC raised the federal funds target range for the first time since 2018 on 2022-03-16 and seven times in 2022 (Federal Reserve press releases)"
+    - name: "March-2023 bank stress"
+      start: 2023-03-01
+      end: 2023-03-31
+      source: "Calendar month March 2023: FDIC named receiver of Silicon Valley Bank on 2023-03-10 and of Signature Bank on 2023-03-12 (FDIC press releases)"

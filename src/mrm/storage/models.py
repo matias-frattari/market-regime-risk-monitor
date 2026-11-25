@@ -158,3 +158,33 @@ class RegimeRules:
     sahm: SahmRule
     nfci_stale_days: int
     known_events: tuple[KnownEvent, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RegimeModelConfig:
+    """Hyperparameters of the HMM regimes v2 (``config/regime_model.yaml``, ADR 0007).
+
+    Fixed a priori: never tuned on returns, backtests or the v1/v2 comparison.
+    """
+
+    n_states: int
+    covariance_type: str
+    n_init: int
+    seed: int
+    max_iter: int
+    tol: float
+    vol_ticker: str
+    vol_window: int
+    macro_features: tuple[str, ...]
+    zscore_min_obs: int
+    min_train_days: int
+    refit_every_days: int
+    windows: tuple[KnownEvent, ...] = ()
+
+    @property
+    def point_in_time_warmup(self) -> int:
+        """Leading trading days without a point-in-time label when SPY has no gaps: the
+        volatility window, then ``zscore_min_obs - 1`` more rows (the z-score is known from
+        its ``zscore_min_obs``-th value), then ``min_train_days`` valid rows before the first fit.
+        """
+        return self.vol_window + (self.zscore_min_obs - 1) + self.min_train_days

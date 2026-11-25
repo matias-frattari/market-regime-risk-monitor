@@ -18,6 +18,7 @@ from mrm.storage.models import (
     MacroSeries,
     Portfolio,
     PriceAdjustment,
+    RegimeModelConfig,
     RegimeRules,
     ReleaseOverride,
     SahmRule,
@@ -30,6 +31,7 @@ DATA_QUALITY_PATH: Path = REPO_ROOT / "config" / "data_quality.yaml"
 PRICE_ADJUSTMENTS_PATH: Path = REPO_ROOT / "config" / "price_adjustments.yaml"
 MACRO_LAGS_PATH: Path = REPO_ROOT / "config" / "macro_lags.yaml"
 REGIME_RULES_PATH: Path = REPO_ROOT / "config" / "regime_rules.yaml"
+REGIME_MODEL_PATH: Path = REPO_ROOT / "config" / "regime_model.yaml"
 PORTFOLIO_PATH: Path = REPO_ROOT / "config" / "portfolio.yaml"  # personal, gitignored
 PORTFOLIO_EXAMPLE_PATH: Path = REPO_ROOT / "config" / "portfolio.example.yaml"
 WEIGHT_SUM_TOLERANCE = 1e-9
@@ -429,15 +431,17 @@ def _sahm_rule(flags: dict[str, Any], known: set[str]) -> SahmRule:
     )
 
 
-def _known_events(report: dict[str, Any]) -> tuple[KnownEvent, ...]:
+def _known_events(
+    report: dict[str, Any], key: str = "known_events", label: str = "known event"
+) -> tuple[KnownEvent, ...]:
     events: list[KnownEvent] = []
-    for entry in _entries(report, "known_events"):
-        name = _text(entry, "name", "known event")
-        start = _date(entry.get("start"), f"known event {name}.start")
-        end = _date(entry.get("end"), f"known event {name}.end")
+    for entry in _entries(report, key):
+        name = _text(entry, "name", label)
+        start = _date(entry.get("start"), f"{label} {name}.start")
+        end = _date(entry.get("end"), f"{label} {name}.end")
         if end < start:
-            raise ValueError(f"known event {name} ends before it starts")
-        events.append(KnownEvent(name, start, end, _text(entry, "source", f"known event {name}")))
+            raise ValueError(f"{label} {name} ends before it starts")
+        events.append(KnownEvent(name, start, end, _text(entry, "source", f"{label} {name}")))
     return tuple(events)
 
 
@@ -470,6 +474,87 @@ def load_regime_rules(
         sahm=_sahm_rule(flags, known),
         nfci_stale_days=_int(report.get("nfci_stale_days"), "report.nfci_stale_days", 1),
         known_events=_known_events(report),
+    )
+
+
+# Values that fact_regimes_v2 and the model code are built around: changing one needs a
+# schema/code change and an ADR, so the loader rejects any other value.
+REGIME_MODEL_FIXED: dict[str, object] = {
+    "model.type": "gaussian_hmm",
+    "model.n_states": 3,
+    "model.covariance_type": "diag",
+    "model.order_states_by": "spy_vol_60d",
+    "features.spy_vol.ticker": "SPY",
+    "features.spy_vol.window": 60,
+    "features.macro": ["NFCI", "T10Y2Y"],
+    "features.standardization": "expanding",
+}
+
+
+def load_regime_model(
+    path: Path | None = None, series_ids: Sequence[str] | None = None
+) -> RegimeModelConfig:
+    """Load ``config/regime_model.yaml`` (see docs/decisions/0007-hmm-regimes-v2.md).
+
+    ``series_ids`` (default: the series of ``config/macro_lags.yaml``) are the macro features
+    that ``macro_asof`` can serve. Raises ValueError on a malformed file, a blocked or unknown
+    series, a value other than those in ``REGIME_MODEL_FIXED``, or a non-positive count.
+    """
+    raw = yaml.safe_load((path or REGIME_MODEL_PATH).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("regime model file must be a mapping")
+    model = _section(raw, "model")
+    features = _section(raw, "features")
+    spy_vol = _section(features, "spy_vol")
+    pit = _section(raw, "point_in_time")
+    report = _section(raw, "report")
+
+    macro = features.get("macro")
+    if not isinstance(macro, list):
+        raise ValueError("features.macro must be a list of series ids")
+    macro = [str(s).strip().upper() for s in macro]
+    known = (
+        {lag.series_id for lag in load_macro_lags()}
+        if series_ids is None
+        else {s.upper() for s in series_ids}
+    )
+    for series in macro:
+        if series in BLOCKED_SERIES:
+            raise ValueError(f"series {series} is copyrighted and must not be used")
+        if series not in known:
+            raise ValueError(f"features.macro {series} is not in config/macro_lags.yaml")
+
+    actual: dict[str, object] = {
+        "model.type": model.get("type"),
+        "model.n_states": model.get("n_states"),
+        "model.covariance_type": model.get("covariance_type"),
+        "model.order_states_by": model.get("order_states_by"),
+        "features.spy_vol.ticker": str(spy_vol.get("ticker") or "").strip().upper(),
+        "features.spy_vol.window": spy_vol.get("window"),
+        "features.macro": macro,
+        "features.standardization": features.get("standardization"),
+    }
+    for key, expected in REGIME_MODEL_FIXED.items():
+        if actual[key] != expected:
+            raise ValueError(
+                f"{key} must be {expected!r} (fact_regimes_v2 and the model code are built "
+                "around it; changing it needs a code change and an ADR)"
+            )
+    tol = _positive_number(model.get("tol"), "model.tol")
+    return RegimeModelConfig(
+        n_states=int(model["n_states"]),
+        covariance_type=str(model["covariance_type"]),
+        n_init=_int(model.get("n_init"), "model.n_init", 1),
+        seed=_int(model.get("seed"), "model.seed", 0),
+        max_iter=_int(model.get("max_iter"), "model.max_iter", 1),
+        tol=tol,
+        vol_ticker=str(actual["features.spy_vol.ticker"]),
+        vol_window=int(spy_vol["window"]),
+        macro_features=tuple(macro),
+        zscore_min_obs=_int(features.get("zscore_min_obs"), "features.zscore_min_obs", 2),
+        min_train_days=_int(pit.get("min_train_days"), "point_in_time.min_train_days", 1),
+        refit_every_days=_int(pit.get("refit_every_days"), "point_in_time.refit_every_days", 1),
+        windows=_known_events(report, "windows", "report window"),
     )
 
 
