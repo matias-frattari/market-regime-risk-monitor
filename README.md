@@ -35,7 +35,8 @@ uv run pytest
 # setup:   TBD
 # ingest:  uv run python -m mrm.ingest.prices [--tickers SPY,TLT] [--dry-run]
 # metrics: uv run mrm metrics [--portfolio PATH] [--dry-run]
-# regimes: uv run mrm regimes [--dry-run]
+# regimes: uv run mrm regimes [--dry-run]      (rules-based v1)
+#          uv run mrm regimes-v2 [--dry-run]   (HMM v2, point-in-time + comparison with v1)
 # test:    uv run pytest
 # export:  TBD
 ```
@@ -45,11 +46,11 @@ uv run pytest
 ## Project layout
 
 ```
-config/            universe.yaml, portfolio.example.yaml, regime_rules.yaml
+config/            universe.yaml, portfolio.example.yaml, regime_rules.yaml, regime_model.yaml
 src/mrm/ingest/    price providers, FRED client, incremental loaders
 src/mrm/storage/   DuckDB schema + helpers
 src/mrm/metrics/   returns, vol, drawdown, VaR/CVaR, correlations, risk contribution
-src/mrm/regimes/   rules-based v1, unsupervised v2 (GMM/HMM), comparison
+src/mrm/regimes/   rules-based v1, Gaussian HMM v2 (point-in-time), comparison
 src/mrm/portfolio/ equal weight, min-variance, max-Sharpe, HRP, backtest engine
 src/mrm/export/    builds the Tableau CSV marts
 tests/             pytest, no network (fixtures / mocked responses)

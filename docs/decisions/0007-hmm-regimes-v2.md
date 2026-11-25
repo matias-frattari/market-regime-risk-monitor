@@ -152,6 +152,10 @@ table.
   hand-written EM implementation and its tests.
 - It brings **scipy** (BSD), used by hmmlearn, and **scikit-learn** (BSD), whose k-means is
   used for initialisation, plus their transitive packages. All are free and pinned in `uv.lock`.
+- **threadpoolctl** (BSD, already a scikit-learn dependency) is declared explicitly. Fits run
+  inside `threadpool_limits(1)` because multithreaded k-means initialisation changed the last
+  bits of the log-likelihood from one run to the next. Single-threaded fits are bit-identical,
+  which the determinism and truncation tests require.
 - The project uses hmmlearn only to fit. The forward filter is ~25 lines of numpy in
   `mrm.regimes.hmm`, so the official version does not depend on hmmlearn's smoothed
   `predict_proba`.

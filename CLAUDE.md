@@ -46,12 +46,13 @@ ingest (Python) -> DuckDB warehouse -> metrics / regimes / portfolio modules -> 
 Repo layout:
 ```
 config/            universe.yaml, macro.yaml, macro_lags.yaml, data_quality.yaml,
-                   price_adjustments.yaml, portfolio.example.yaml, regime_rules.yaml
+                   price_adjustments.yaml, portfolio.example.yaml, regime_rules.yaml,
+                   regime_model.yaml
 src/mrm/ingest/    providers, FRED client, incremental loaders
 src/mrm/storage/   duckdb schema + helpers
 src/mrm/quality/   data quality checks (`mrm check`), NYSE/federal calendar
 src/mrm/metrics/   returns, vol, drawdown, VaR/CVaR, correlations, risk contribution
-src/mrm/regimes/   rules-based v1, unsupervised v2 (GMM/HMM), comparison
+src/mrm/regimes/   rules-based v1, Gaussian HMM v2 (point-in-time), comparison
 src/mrm/portfolio/ equal weight, min-variance / max-Sharpe, HRP, backtest engine
 src/mrm/export/    builds the Tableau CSV marts
 tests/             pytest, no network (fixtures / mocked responses)
@@ -72,7 +73,7 @@ docs/              architecture.md, methodology.md, data_dictionary.md, decision
 ## Data model (DuckDB)
 Tables: raw_prices, raw_macro, dim_asset, ingest_log, dq_results, price_adjustments,
 macro_publication_lags, macro_release_overrides, fact_returns, fact_risk_metrics,
-fact_correlations, fact_regimes, fact_backtest_equity, fact_backtest_summary.
+fact_correlations, fact_regimes, fact_regimes_v2, fact_backtest_equity, fact_backtest_summary.
 Views: price_adjustment_status, prices_clean, macro_asof.
 Every table and view documented in docs/data_dictionary.md.
 
@@ -104,7 +105,16 @@ are reconstructions.
   flags curve_inverted (T10Y2Y < 0) and unemployment_rising (Sahm >= 0.50 pp). ALFRED vintages
   stay out of scope (revision look-ahead documented). Thresholds are a priori: never tune them
   on results.
-- Next: step 3.2 regimes v2 (GMM/HMM) and comparison against v1.
+- Phase 3.2 done: HMM regimes v2 (ADR 0007, `config/regime_model.yaml`) into
+  `fact_regimes_v2` (local only, PK trade_date + variant): Gaussian HMM, 3 states, diagonal
+  covariance on SPY 60d vol + as-of NFCI + T10Y2Y. Official `point_in_time` variant: expanding
+  z-scores, yearly refits on rows before each refit, FILTERED probabilities (never Viterbi or
+  smoothed); NULL only in the warm-up `window + zscore_min_obs - 1 + min_train_days` (derive
+  it from the config, never hard-code it), so no point-in-time label for 2008-09.
+  `full_sample` variant (`is_point_in_time = false`, smoothed) is descriptive only: never use
+  it for performance or backtests. Hyperparameters are a priori: never tune them on results.
+- Next: Phase 4 allocation strategies + backtest, performance per regime (act on the regime of
+  `t` from `t + 1`; state the SPY-volatility circularity next to per-regime tables).
 
 ## Metric definitions (document formulas in docs/methodology.md)
 Daily log/simple returns; annualized vol (252d); rolling 60d vol; max drawdown;
@@ -117,8 +127,11 @@ level -> calm / tension / stress (STLFSI4 same thresholds, robustness check only
 flags curve_inverted (T10Y2Y) and unemployment_rising (UNRATE, Sahm rule). SPY realized vol is
 not used in v1. Read from `macro_asof` (applies the publication lags, ADR 0005).
 `nfci_history` marks NFCI as backcast/revised: never real time (latest FRED vintage).
-v2: unsupervised model (GMM or HMM) and a comparison against v1. Report honestly where
-they disagree. Avoid look-ahead bias: use only information available at each date.
+v2 (config/regime_model.yaml, ADR 0007): Gaussian HMM, states ordered by SPY-vol mean after
+each fit; `point_in_time` = filtered probabilities with yearly refits (the only variant for
+comparisons of performance), `full_sample` = smoothed, descriptive only. `mrm regimes-v2`
+reports where v1 and v2 disagree, honestly; agreement is not a validation. Avoid look-ahead
+bias: use only information available at each date (row t is known at the close of t).
 
 ## Allocation & backtest
 Strategies: equal weight, min-variance, max-Sharpe (Markowitz), HRP.
@@ -156,7 +169,8 @@ live Tableau Public link; methodology and limitations documented.
 - `uv run mrm ingest prices|macro [...]` is an alias of the two `python -m` commands above
   (same options and exit codes)
 - clean layer: `prepare_clean_prices(con)` creates the schema and syncs config/price_adjustments.yaml
-  and config/macro_lags.yaml (run by `mrm check`, `mrm metrics` and `mrm regimes`; invalid
+  and config/macro_lags.yaml (run by `mrm check`, `mrm metrics`, `mrm regimes` and
+  `mrm regimes-v2`; invalid
   config -> exit 2)
 - data quality: `uv run mrm check [--no-save]` (thresholds in config/data_quality.yaml; prints
   the report by severity, appends to `dq_results`; exit 1 only on critical findings)
@@ -171,5 +185,12 @@ live Tableau Public link; methodology and limitations documented.
   macro_asof on NYSE trading days, full rebuild of fact_regimes in one transaction; prints
   aggregates only: shares per regime/flag, changes per year, NFCI vs STLFSI4 agreement, NULLs
   with reasons, stale NFCI runs; exit 1 no data, 2 config error)
+- regimes v2: `uv run mrm regimes-v2 [--dry-run]` (= `python -m mrm.regimes.run_v2`;
+  hyperparameters in config/regime_model.yaml; prepares the clean layer, reads SPY from
+  prices_clean and NFCI/T10Y2Y (+ v1 inputs) from macro_asof on NYSE trading days, builds the
+  point_in_time and full_sample variants, recomputes v1 in memory (does not write fact_regimes),
+  full rebuild of fact_regimes_v2 in one transaction; prints aggregates only: NULLs with
+  reasons, fit log, shares, episodes, changes per year, v1 x v2 confusion matrices, agreement
+  per year, dated windows; ~10 s; exit 1 no data / too short for a first fit, 2 config error)
 - test: `uv run ruff check . && uv run ruff format --check . && uv run pytest`
 - export: TBD

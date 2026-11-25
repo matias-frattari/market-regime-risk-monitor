@@ -227,9 +227,103 @@ month (lag 41, plus the 3-month average). The lags are conservative by up to one
   2010–2019 and 2021–2026 is entirely `calm`. This is a property of the NFCI definition (0 = the
   1971+ average), reported as is, not a reason to retune.
 - **Few changes:** 6 regime changes since 2007. A single-index rule is a transparent baseline,
-  not a model of the cycle (v2: GMM/HMM).
+  not a model of the cycle (v2: HMM, below).
 - **STLFSI4 agreement** is 73.7% on all days and 96.8% when STLFSI4 is real time. In every
   disagreement STLFSI4 is the higher level. The same thresholds mean different things on
   the two indices, so agreement is a robustness indicator, not a validation.
 - **Sahm warm-up:** `sahm_gap` is NULL until 2007-12-12, so the flag misses the start of the
   2007-08 crisis (stress from August 2007, NBER peak December 2007).
+
+
+## Regimes v2, Gaussian HMM (ADR 0007)
+
+Hyperparameters: `config/regime_model.yaml`, fixed before the model was run on the warehouse and
+never tuned on returns, backtests or the v1/v2 comparison (a change needs a new ADR).
+
+### Model and features
+
+- Gaussian HMM, 3 states, diagonal covariance, EM (`hmmlearn`), best log-likelihood of
+  `n_init` seeded starts. Fits run single-threaded so results are bit-identical between runs.
+- Features per NYSE trading day:
+  - `spy_vol_60d` = `std(r_{t−59..t}, ddof=1) · √252` on SPY daily simple returns from
+    `prices_clean` (`mrm.metrics.risk.rolling_volatility`, the formula of `fact_risk_metrics`)
+  - `nfci`, `t10y2y` = as-of values from `macro_asof` (`available_date < trade_date`)
+- Standardisation of the official version: expanding `z_t = (x_t − mean(x_1..t)) / std(x_1..t)`,
+  NaN until a feature has `zscore_min_obs` values.
+- After each fit, states are ordered by their emission mean of `z_spy_vol`: lowest = `calm`,
+  highest = `stress`. The names are a convention for a statistical cluster.
+- `regime = argmax(p_calm, p_tension, p_stress)`.
+
+### Two variants
+
+| | `point_in_time` (official) | `full_sample` (descriptive) |
+|---|---|---|
+| `is_point_in_time` | true | **false** |
+| Standardisation | expanding | whole sample |
+| Fits | first on the day with `min_train_days` valid rows before it, then every `refit_every_days` trading days, each on rows before its refit day | one, on all rows |
+| Probabilities | **filtered** `P(s_t \| x_1..x_t)` (numpy forward recursion) | smoothed `P(s_t \| x_1..x_n)` (forward-backward) |
+| Use | per-regime analysis, backtests (from `t + 1`) | description only: never performance or backtests |
+
+A row is *valid* when its three z-scores are known. A point-in-time row after the first fit with
+a missing feature would be a prediction-only filter step (`p_t = p_{t−1} · A`). The report
+counts such rows.
+
+### Warm-up (exact NULL count)
+
+The point-in-time model columns are NULL on the first
+`window + (zscore_min_obs − 1) + min_train_days` trading days when SPY has no gaps:
+- `window` rows before the first 60-day volatility
+- then `zscore_min_obs − 1` rows: the expanding z-score is known from its
+  `zscore_min_obs`-th value, the current one included
+- then `min_train_days` valid rows before the first fit
+
+`mrm regimes-v2` prints the observed count next to this formula. `tests/test_regimes_v2_real.py`
+derives the expected count from the config. Because prices start in January 2007, **the official
+version has no label for 2008–09**: the crisis is only in its first training window. The
+full-sample version is NULL only on the first `window` rows.
+
+### No look-ahead (tests)
+
+- Row `t` uses SPY closes up to and including `t`, so it is known at the close of `t`. **Act on it
+  from `t + 1`.**
+- `tests/test_regimes_v2_lookahead.py` (synthetic):
+  - Truncation: for several cut dates `D`, including dates just before and just after refits,
+    rows `≤ D` are identical when rebuilt from data up to `D`.
+  - Changing the future leaves the past unchanged.
+  - The last segment equals a forward filter with that segment's fit, and differs from the
+    smoothed posteriors.
+  - Every training window ends before the day it labels.
+- `tests/test_regimes_hmm.py`:
+  - The forward filter matches a textbook recursion and hmmlearn's log-likelihood.
+  - Filtered probabilities ignore the future; smoothed ones do not.
+  - Fits are deterministic.
+
+### Comparison report (`mrm regimes-v2`, aggregates only)
+
+- NULLs per variant and column, with reasons
+- fit log: training rows, log-likelihood, EM iterations, convergence, state means
+- share of days per regime (each model's days, and the common point-in-time days)
+- episode count and mean length
+- changes per year, and point-in-time changes that fall on a refit day
+- confusion matrices v1 × v2 point-in-time, v1 × v2 full-sample, and v2 point-in-time × full-sample
+- agreement per year
+- mean SPY volatility per regime
+- tension/stress/NULL days inside four dated windows (GFC, COVID, 2022, March 2023; sources in
+  the config), as description, not as targets
+
+### Limitations
+
+- **Not a validation.** v1 and v2 have no ground truth. Their agreement, or the overlap with
+  dated windows, describes them and scores neither.
+- **State names follow volatility only.** The ordering uses the SPY-volatility mean. If two states
+  differ mainly on NFCI or the yield curve, `calm` and `tension` can have almost the same
+  volatility. The report prints the mean volatility per regime so this is visible. The first-run
+  findings are in ADR 0007.
+- **Refit discontinuities.** Parameters change once a year, so a label can change on a refit day
+  with no change in the data. The report counts these changes.
+- **Circularity with the portfolio.** SPY is 40% of the example portfolio and of the 60/40
+  benchmark, and its volatility is a feature. Per-regime performance of SPY-heavy portfolios is
+  partly mechanical. Report v1 (no SPY input) alongside it.
+- **Model assumptions.** Gaussian, diagonal emissions with a constant transition matrix. EM
+  finds local optima. Expanding z-scores drift as history accumulates.
+- **Inherited data limits.** NFCI is FRED's latest vintage, backcast before 2011-06 (ADR 0005).

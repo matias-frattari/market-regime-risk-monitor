@@ -112,10 +112,10 @@ every query. If the provider fixes its data, the correction stops applying by it
 | `run.py` | CLI: prepares the clean layer, runs the checks, appends to `dq_results` |
 
 Check rules and thresholds: `docs/data_dictionary.md`, "Data quality checks".
-`src/mrm/cli.py` dispatches `mrm ingest prices|macro`, `mrm check`, `mrm metrics` and
-`mrm regimes` to the module entry points.
+`src/mrm/cli.py` dispatches `mrm ingest prices|macro`, `mrm check`, `mrm metrics`,
+`mrm regimes` and `mrm regimes-v2` to the module entry points.
 
-## Regimes (`src/mrm/regimes/`, `uv run mrm regimes`)
+## Regimes (`src/mrm/regimes/`, `uv run mrm regimes`, `uv run mrm regimes-v2`)
 
 | Module | Role |
 |---|---|
@@ -123,8 +123,16 @@ Check rules and thresholds: `docs/data_dictionary.md`, "Data quality checks".
 | `io.py` | Reads NFCI, STLFSI4, T10Y2Y, UNRATE from `macro_asof` (NYSE trading days only); full rebuild of `fact_regimes` in one transaction |
 | `report.py` | Aggregates only: shares per regime and flag, changes per year, NFCI vs STLFSI4 agreement, NULLs with reasons, stale NFCI runs vs known events |
 | `run.py` | CLI: loads `config/regime_rules.yaml`, prepares the clean layer, builds, writes, prints the report |
+| `features.py` | v2 pure functions: SPY 60-day volatility (reuses `mrm.metrics.risk.rolling_volatility`), as-of NFCI/T10Y2Y, expanding and full-sample z-scores |
+| `hmm.py` | v2: best-of-`n_init` Gaussian HMM fit (hmmlearn, single-threaded), state ordering by SPY volatility, numpy forward filter (filtered probabilities), smoothed posteriors for the descriptive variant only |
+| `v2.py` | v2 pure builder: refit schedule, `point_in_time` (yearly refits, filtered) and `full_sample` (smoothed) variants, fit log |
+| `report_v2.py` | Aggregates only: NULLs with reasons, fit log, shares, episodes, changes per year, v1 × v2 confusion matrices, agreement per year, dated windows |
+| `run_v2.py` | CLI: loads `config/regime_model.yaml` and `config/regime_rules.yaml`, prepares the clean layer, builds v2, recomputes v1 in memory, rebuilds `fact_regimes_v2`, prints the report |
 
-Rules, thresholds and limits: ADR 0006 and `docs/methodology.md`, "Regimes v1".
+`io.py` also writes and reads `fact_regimes_v2`.
+
+Rules, thresholds and limits: ADR 0006 and `docs/methodology.md`, "Regimes v1". Model,
+look-ahead protocol and limits: ADR 0007 and `docs/methodology.md`, "Regimes v2".
 
 ## Runtime dependencies
 
@@ -134,5 +142,7 @@ Rules, thresholds and limits: ADR 0006 and `docs/methodology.md`, "Regimes v1".
 | `pyyaml` | Read the editable config files (`config/*.yaml`) |
 | `python-dotenv` | Load API keys from the gitignored `.env` (used by the ingestion CLI) |
 | `requests` | HTTP client for the Twelve Data and FRED APIs (ingestion) |
+| `hmmlearn` | Gaussian HMM fitting (EM) for regimes v2; brings `scipy` and `scikit-learn` (k-means initialisation) (ADR 0007) |
+| `threadpoolctl` | Run HMM fits single-threaded so results are bit-identical between runs (ADR 0007) |
 
 Dev: `ruff` (lint/format), `pytest` (tests), `hatchling` (build backend).

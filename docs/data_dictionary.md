@@ -326,6 +326,41 @@ creates no NULL.
 **Not exported yet.** The planned Tableau mart (Phase 5) is a daily regime label and flags
 derived from public FRED series. Its exact columns are decided then.
 
+### Regime table v2 (Phase 3.2, local only)
+
+#### `fact_regimes_v2`
+HMM regimes v2 (ADR 0007, hyperparameters in `config/regime_model.yaml`). Built by
+`uv run mrm regimes-v2` (`mrm.regimes.run_v2`) from `prices_clean` (SPY) and `macro_asof`
+(NFCI, T10Y2Y) on the NYSE trading days of `prices_clean`. Each run is a full rebuild in one
+transaction. PK: `(trade_date, variant)`, so there is **one row per trading day per variant**.
+Row `t` is known at the close of `t`: consumers act on it from `t + 1`.
+
+| Column | Type | Null | Description |
+|---|---|---|---|
+| trade_date | DATE | no | NYSE trading day of `prices_clean` |
+| variant | VARCHAR | no | `point_in_time` (official) or `full_sample` (descriptive) (CHECK) |
+| is_point_in_time | BOOLEAN | no | `true` only for `point_in_time` (CHECK). **`false` rows use the whole sample: never for performance comparisons or backtests** |
+| regime | VARCHAR | yes¹ | `argmax` of the three probabilities: `calm` / `tension` / `stress` (CHECK). States ordered by mean SPY volatility after each fit |
+| p_calm, p_tension, p_stress | DOUBLE | yes¹ | State probabilities in [0, 1] summing to 1. `point_in_time`: **filtered** `P(s_t \| x_1..x_t)`; `full_sample`: smoothed |
+| spy_vol_60d | DOUBLE | yes² | Annualised 60-day realised volatility of SPY daily simple returns (same formula as `fact_risk_metrics`) |
+| nfci_value, t10y2y_value | DOUBLE | yes³ | As-of NFCI and 10y−2y spread from `macro_asof` |
+| z_spy_vol, z_nfci, z_t10y2y | DOUBLE | yes⁴ | Standardised features fed to the model: expanding (`point_in_time`) or whole-sample (`full_sample`) |
+| train_end_date | DATE | yes¹ | Last trading day of the fit that labels the row (`< trade_date` for `point_in_time`; last day of the data for `full_sample`) |
+| train_rows | INTEGER | yes¹ | Valid rows in that fit |
+| computed_at | TIMESTAMP | no | Run time (UTC) |
+
+¹ `point_in_time`: NULL only on the first `window + (zscore_min_obs − 1) + min_train_days`
+trading days when SPY has no gaps (warm-up before the first fit). Values come from
+`config/regime_model.yaml`; `mrm regimes-v2` prints the observed count and date range next to
+the formula. `full_sample`: NULL only on the first `window` rows.
+² NULL on the first `window` rows (60 returns needed) and on windows that span a missing SPY close.
+³ NULL only before the series has an as-of value.
+⁴ `point_in_time`: NULL until each feature has `zscore_min_obs` values (`z_spy_vol`: after the
+volatility window). `full_sample`: NULL where a feature is NULL.
+
+**Not exported yet.** Only aggregates and labels of the `point_in_time` variant are candidates
+for the Phase 5 Tableau mart. The daily `spy_vol_60d` and z-scores stay local.
+
 ## Warehouse views
 
 Created by `create_schema` with `CREATE OR REPLACE VIEW`.
