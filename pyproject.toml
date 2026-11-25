@@ -11,6 +11,7 @@ dependencies = [
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
     "requests>=2.34.2",
+    "threadpoolctl>=3.8.0",
 ]
 
 [project.scripts]
@@ -35,3 +36,7 @@ select = ["E", "F", "I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# hmmlearn 0.3.3 sets ndarray.shape in its utils (deprecated in NumPy 2.5); not our code.
+filterwarnings = [
+    "ignore:Setting the shape on a NumPy array:DeprecationWarning:hmmlearn",
+]
