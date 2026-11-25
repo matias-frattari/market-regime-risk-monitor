@@ -19,6 +19,7 @@ TABLES: tuple[str, ...] = (
     "fact_returns",
     "fact_risk_metrics",
     "fact_correlations",
+    "fact_regimes",
 )
 VIEWS: tuple[str, ...] = ("price_adjustment_status", "prices_clean", "macro_asof")
 
@@ -151,6 +152,35 @@ DDL: tuple[str, ...] = (
         computed_at  TIMESTAMP NOT NULL,  -- UTC
         PRIMARY KEY (ticker_a, ticker_b, trade_date, window_label),
         CHECK (ticker_a < ticker_b)
+    )
+    """,
+    # Rules-based regimes v1 (Phase 3.1, ADR 0006), rebuilt by mrm.regimes.run: one row per
+    # trading day. Inputs are the point-in-time values of macro_asof. *_history: 'backcast' if
+    # the value's available_date < the index's first ALFRED vintage (config/regime_rules.yaml),
+    # else 'revised'; both are FRED's latest vintage (re-estimated), never the real-time value.
+    # NULL regime / flag: the input has no as-of value yet (sahm_gap: warm-up of the rule).
+    """
+    CREATE TABLE IF NOT EXISTS fact_regimes (
+        trade_date          DATE      PRIMARY KEY,
+        regime              VARCHAR   CHECK (regime IN ('calm', 'tension', 'stress')),
+        nfci_value          DOUBLE,
+        nfci_value_date     DATE,
+        nfci_available_date DATE,
+        nfci_age_days       INTEGER,
+        nfci_history        VARCHAR   CHECK (nfci_history IN ('backcast', 'revised')),
+        stlfsi4_value       DOUBLE,
+        stlfsi4_value_date  DATE,
+        stlfsi4_regime      VARCHAR   CHECK (stlfsi4_regime IN ('calm', 'tension', 'stress')),
+        stlfsi4_history     VARCHAR   CHECK (stlfsi4_history IN ('backcast', 'revised')),
+        regime_agrees       BOOLEAN,
+        t10y2y_value        DOUBLE,
+        t10y2y_value_date   DATE,
+        curve_inverted      BOOLEAN,
+        unrate_value        DOUBLE,
+        unrate_value_date   DATE,
+        sahm_gap            DOUBLE,
+        unemployment_rising BOOLEAN,
+        computed_at         TIMESTAMP NOT NULL  -- UTC
     )
     """,
     # Raw simple return on each ex_date vs the previous stored trading day of the ticker.

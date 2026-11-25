@@ -225,3 +225,31 @@ def test_benchmark_replace_prices_65k_rows(con: duckdb.DuckDBPyConnection) -> No
     elapsed = time.perf_counter() - start
     print(f"\n[benchmark] replace_prices 13 x 5000 = 65,000 rows: {elapsed:.2f} s")
     assert count(con, "raw_prices") == 65_000
+
+
+# --- fact_regimes -----------------------------------------------------------------------
+
+
+def test_fact_regimes_one_row_per_day_and_checked_labels(con: duckdb.DuckDBPyConnection) -> None:
+    con.execute(
+        "INSERT INTO fact_regimes (trade_date, regime, nfci_history, computed_at) "
+        "VALUES ('2024-01-02', 'calm', 'revised', now())"
+    )
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(
+            "INSERT INTO fact_regimes (trade_date, regime, computed_at) "
+            "VALUES ('2024-01-02', 'stress', now())"
+        )
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(
+            "INSERT INTO fact_regimes (trade_date, regime, computed_at) "
+            "VALUES ('2024-01-03', 'expansion', now())"
+        )
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(
+            "INSERT INTO fact_regimes (trade_date, nfci_history, computed_at) "
+            "VALUES ('2024-01-04', 'realtime', now())"
+        )
+    # NULL regime is allowed (no as-of NFCI yet) and counted by the report.
+    con.execute("INSERT INTO fact_regimes (trade_date, computed_at) VALUES ('2024-01-05', now())")
+    assert con.execute("SELECT count(*) FROM fact_regimes").fetchone()[0] == 2
